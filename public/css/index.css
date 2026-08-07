@@ -1,0 +1,250 @@
+.page-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+}
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem 0;
+}
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-weight: 700;
+    font-size: 1.5rem;
+    color: var(--accent);
+}
+.logo img {
+    border-radius: 0.5rem;
+}
+.hero {
+    text-align: center;
+    padding: 4rem 0;
+}
+.hero h1 {
+    font-size: 2.5rem;
+    margin-bottom: 1.5rem;
+}
+.hero .accent {
+    color: var(--accent);
+}
+.cta-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 2rem;
+}
+.feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 2rem;
+    margin: 4rem 0;
+}
+.feature-card {
+    background: var(--bg-card);
+    padding: 1.5rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition);
+}
+.feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+}
+.feature-icon {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+}
+.feature-card h3 {
+    margin-bottom: 0.5rem;
+}
+.testimonials {
+    background: var(--bg-secondary);
+    padding: 3rem;
+    border-radius: var(--radius-lg);
+    margin: 4rem 0;
+}
+.faq {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 3rem 0;
+}
+.faq-item {
+    border-bottom: 1px solid var(--border);
+    padding: 1.5rem 0;
+}
+.faq-question {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    font-weight: 600;
+}
+.faq-answer {
+    margin-top: 1rem;
+    color: var(--text-secondary);
+    display: none;
+}
+.faq-item.active .faq-answer {
+    display: block;
+}
+footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 0;
+    margin-top: 4rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+#install-btn {
+    background: var(--success);
+    color: white;
+    border: none;
+}
+#install-btn:hover {
+    background: #0e9f6e;
+}
+
+/* ==========================================
+   FLOATING REFERRAL MODAL – (fully styled)
+   ========================================== */
+.referral-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: modalFadeIn 0.3s ease;
+}
+
+.referral-modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+}
+
+.referral-modal-card {
+    position: relative;
+    max-width: 440px;
+    width: 90%;
+    background: var(--bg-card, #ffffff);
+    padding: 2rem 2rem 2rem;
+    border-radius: var(--radius-lg, 24px);
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    text-align: center;
+    transform: translateY(0);
+    animation: modalSlideUp 0.4s ease;
+    border: 1px solid var(--border, rgba(0,0,0,0.05));
+}
+
+.referral-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--text-muted, #94a3b8);
+    cursor: pointer;
+    transition: var(--transition, 0.2s);
+    line-height: 1;
+}
+.referral-modal-close:hover {
+    color: var(--text-body, #1f2937);
+    transform: rotate(90deg);
+}
+
+.referral-modal-icon {
+    font-size: 3.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.referral-modal-card h2 {
+    font-size: 1.8rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-heading, #1f2937);
+}
+
+.referral-modal-message {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--text-secondary, #4b5563);
+    margin-bottom: 1.5rem;
+}
+
+.referral-modal-code {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    background: var(--bg-secondary, #f1f5f9);
+    padding: 0.6rem 1rem;
+    border-radius: 60px;
+    margin: 0 auto 1.5rem;
+    width: fit-content;
+    font-size: 0.95rem;
+}
+.referral-modal-code strong {
+    color: var(--accent, #1976d2);
+    letter-spacing: 0.5px;
+}
+.btn-copy {
+    background: var(--accent, #1976d2);
+    color: white;
+    border: none;
+    padding: 0.3rem 0.8rem;
+    border-radius: 40px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: var(--transition, 0.2s);
+}
+.btn-copy:hover {
+    opacity: 0.8;
+}
+
+.referral-modal-btn {
+    width: 100%;
+    padding: 0.9rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border-radius: 60px;
+    border: none;
+    background: var(--accent, #1976d2);
+    color: white;
+    cursor: pointer;
+    transition: var(--transition, 0.2s);
+    margin-bottom: 1rem;
+}
+.referral-modal-btn:hover {
+    transform: scale(1.02);
+    box-shadow: 0 8px 20px rgba(25, 118, 210, 0.3);
+}
+
+.referral-modal-footer {
+    font-size: 0.9rem;
+    color: var(--text-muted, #64748b);
+}
+.referral-modal-footer a {
+    color: var(--accent, #1976d2);
+    text-decoration: none;
+    font-weight: 500;
+}
+.referral-modal-footer a:hover {
+    text-decoration: underline;
+}
+
+/* Animations */
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+@keyframes modalSlideUp {
+    from { transform: translateY(30px); opacity: 0; }
+    to   { transform: translateY(0); opacity: 1; }
+}

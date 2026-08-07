@@ -1,0 +1,62 @@
+.locked-container {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+}
+.lock-card {
+    max-width: 600px;
+    width: 100%;
+    background: white;
+    border-radius: var(--radius-lg);
+    padding: 2.5rem;
+    box-shadow: var(--shadow-lg);
+}
+.dark-theme .lock-card {
+    background: #1e293b;
+}
+.lock-icon {
+    font-size: 4rem;
+    text-align: center;
+    margin-bottom: 1rem;
+}
+.reason-box {
+    background: rgba(239, 68, 68, 0.1);
+    border-left: 4px solid var(--danger);
+    padding: 1rem;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    margin: 1.5rem 0;
+}
+.lock-details {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: var(--radius);
+    font-size: 0.875rem;
+    margin-bottom: 1.5rem;
+}
+.prevention-tips {
+    margin-bottom: 2rem;
+}
+.prevention-tips ul {
+    margin-left: 1.5rem;
+    margin-top: 0.5rem;
+}
+.support-section {
+    background: var(--bg-secondary);
+    padding: 1.5rem;
+    border-radius: var(--radius);
+    margin-bottom: 1.5rem;
+}
+.support-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+.danger-zone {
+    border: 1px dashed var(--danger);
+    padding: 1.5rem;
+    border-radius: var(--radius);
+    margin-bottom: 1.5rem;
+}
