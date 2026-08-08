@@ -34,9 +34,8 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      # --- NEW: Signing setup ---
       - name: Decode Keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > medhub-keystore.jks
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/medhub-keystore.jks
 
       - name: Create keystore.properties
         run: |
@@ -44,7 +43,6 @@ jobs:
           echo "keystorePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/keystore.properties
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/keystore.properties
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/keystore.properties
-      # ----------------------------
 
       - name: Make gradlew executable
         working-directory: ./android
