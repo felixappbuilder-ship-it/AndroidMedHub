@@ -8,10 +8,17 @@
     <link rel="preload" href="/assets/images/splash.png" as="image" />
 
     <style>
-        /* ===== RESET & BASE (unchanged) ===== */
+        /* ===== RESET & BASE ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html {
+            font-size: 16px !important;
+            -webkit-text-size-adjust: 100% !important;
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-size: 1rem !important;
+            line-height: 1.5 !important;
             background: #0a0e1a;
             color: #ffffff;
             height: 100vh;
@@ -23,6 +30,7 @@
             user-select: none;
             -webkit-tap-highlight-color: transparent;
         }
+
         .splash-container {
             width: 100%;
             height: 100%;
@@ -169,156 +177,151 @@
         <div class="version-info">v1.0.0</div>
     </div>
 
-    <script>
-        (function() {
-            'use strict';
+    <script type="module">
+        // ===== DOM refs =====
+        const progressFill = document.getElementById('progressFill');
+        const loadingText = document.getElementById('loadingText');
+        const spinner = document.getElementById('spinner');
+        const referralBadge = document.getElementById('referralBadge');
+        const refBadgeCode = document.getElementById('refBadgeCode');
 
-            // DOM refs
-            const progressFill = document.getElementById('progressFill');
-            const loadingText = document.getElementById('loadingText');
-            const spinner = document.getElementById('spinner');
-            const referralBadge = document.getElementById('referralBadge');
-            const refBadgeCode = document.getElementById('refBadgeCode');
-
-            // ===== REFERRAL DETECTION =====
-            function detectReferral() {
-                const params = new URLSearchParams(window.location.search);
-                let code = params.get('ref') || params.get('referral') || params.get('code');
-                if (code) {
-                    code = code.trim();
-                    if (code.length > 0) {
-                        localStorage.setItem('referral_code', code);
-                        console.log('[Splash] Referral code from URL:', code);
-                        return code;
-                    }
+        // ===== REFERRAL DETECTION =====
+        function detectReferral() {
+            const params = new URLSearchParams(window.location.search);
+            let code = params.get('ref') || params.get('referral') || params.get('code');
+            if (code) {
+                code = code.trim();
+                if (code.length > 0) {
+                    localStorage.setItem('referral_code', code);
+                    console.log('[Splash] Referral code from URL:', code);
+                    return code;
                 }
-                const stored = localStorage.getItem('referral_code');
-                if (stored) {
-                    console.log('[Splash] Referral code from storage:', stored);
-                    return stored;
-                }
-                return null;
             }
+            const stored = localStorage.getItem('referral_code');
+            if (stored) {
+                console.log('[Splash] Referral code from storage:', stored);
+                return stored;
+            }
+            return null;
+        }
 
-            const referralCode = detectReferral();
+        const referralCode = detectReferral();
+        if (referralCode) {
+            referralBadge.style.display = 'block';
+            refBadgeCode.textContent = referralCode;
+        }
+
+        // ===== ORIENTATION LOCK (dynamic import, no top-level await) =====
+        let screenOrientation = null;
+
+        async function initOrientation() {
+            try {
+                const module = await import('@capacitor/screen-orientation');
+                screenOrientation = module.ScreenOrientation;
+                await screenOrientation.lock({ orientation: 'portrait' });
+                console.log('[Splash] Orientation locked to portrait');
+            } catch (e) {
+                console.warn('[Splash] Orientation lock not available:', e);
+            }
+        }
+        initOrientation();
+
+        // ===== HELPER: Safe redirect with unlock =====
+        function safeRedirect(targetPath) {
+            if (screenOrientation) {
+                screenOrientation.unlock().catch(() => {});
+            }
+            let target = targetPath;
             if (referralCode) {
-                referralBadge.style.display = 'block';
-                refBadgeCode.textContent = referralCode;
+                const sep = target.includes('?') ? '&' : '?';
+                target += sep + 'ref=' + encodeURIComponent(referralCode);
             }
+            console.log('[Splash] Redirecting to:', target);
+            window.location.href = target;
+        }
 
-            // ===== PROGRESS UPDATER =====
-            let progress = 0;
-            const MIN_PROGRESS = 10;
-            const MAX_PROGRESS = 100;
+        // ===== PROGRESS UPDATER =====
+        let progress = 0;
+        const MIN_PROGRESS = 10;
+        const MAX_PROGRESS = 100;
 
-            function updateProgress(value, text) {
-                progress = Math.min(value, MAX_PROGRESS);
-                progressFill.style.width = progress + '%';
-                if (text) loadingText.textContent = text;
-                if (progress >= MAX_PROGRESS) {
-                    spinner.style.display = 'none';
-                    loadingText.textContent = '✓ Ready!';
-                }
+        function updateProgress(value, text) {
+            progress = Math.min(value, MAX_PROGRESS);
+            progressFill.style.width = progress + '%';
+            if (text) loadingText.textContent = text;
+            if (progress >= MAX_PROGRESS) {
+                spinner.style.display = 'none';
+                loadingText.textContent = '✓ Ready!';
             }
+        }
 
-            // ===== SIMULATE LOADING ANIMATION =====
-            let loadInterval = setInterval(() => {
-                const step = 1 + Math.random() * 2;
-                let current = parseFloat(progressFill.style.width) || MIN_PROGRESS;
-                current += step;
-                if (current > 85) current = 85; // keep below 85 until real load finishes
-                updateProgress(current);
-                if (current >= 85) clearInterval(loadInterval);
-            }, 120);
+        // ===== SIMULATE LOADING ANIMATION =====
+        let loadInterval = setInterval(() => {
+            const step = 1 + Math.random() * 2;
+            let current = parseFloat(progressFill.style.width) || MIN_PROGRESS;
+            current += step;
+            if (current > 85) current = 85;
+            updateProgress(current);
+            if (current >= 85) clearInterval(loadInterval);
+        }, 120);
 
-            // ===== LOAD APP MODULES & CHECK AUTH =====
-            async function loadApp() {
+        // ===== MAIN LOADER – SILENT FALLBACK =====
+        async function loadApp() {
+            try {
+                updateProgress(15, 'Loading core...');
+                await import('/scripts/utils.js');
+                updateProgress(30, 'Loading database...');
+                await import('/scripts/db.js');
+                updateProgress(45, 'Loading auth...');
+                const auth = await import('/scripts/auth.js');
+                updateProgress(55, 'Loading app...');
+                const app = await import('/scripts/app.js');
+
+                updateProgress(65, 'Initializing...');
+                let isLoggedIn = false;
                 try {
-                    updateProgress(15, 'Loading core modules...');
-
-                    // Dynamic imports – these will be cached by the browser
-                    const utils = await import('/scripts/utils.js');
-                    updateProgress(30, 'Loading database...');
-
-                    const db = await import('/scripts/db.js');
-                    updateProgress(45, 'Loading authentication...');
-
-                    const auth = await import('/scripts/auth.js');
-                    updateProgress(55, 'Loading app state...');
-
-                    const app = await import('/scripts/app.js');
-                    updateProgress(65, 'Initializing app...');
-
-                    // Initialize app (this loads user from IndexedDB)
                     await app.initializeApp();
-                    updateProgress(80, 'Checking authentication...');
-
-                    // Determine redirect
-                    const isLoggedIn = app.checkAuth();
-                    updateProgress(90, isLoggedIn ? 'Welcome back!' : 'Preparing welcome...');
-
-                    // Build redirect URL with referral
-                    let target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
-                    if (referralCode) {
-                        const sep = target.includes('?') ? '&' : '?';
-                        target += sep + 'ref=' + encodeURIComponent(referralCode);
-                    }
-
-                    // Clear loading interval and finalise
-                    clearInterval(loadInterval);
-                    updateProgress(100, 'Ready!');
-
-                    // Short delay so the user sees the "Ready!" state
-                    setTimeout(() => {
-                        console.log('[Splash] Redirecting to:', target);
-                        window.location.href = target;
-                    }, 500);
-
-                } catch (err) {
-                    console.error('[Splash] Failed to load app:', err);
-                    loadingText.textContent = '⚠️ Error loading app. Please check your connection.';
-                    loadingText.style.color = '#f87171';
-                    spinner.style.display = 'none';
-                    // Allow retry after a delay?
-                    setTimeout(() => {
-                        if (confirm('Failed to load the app. Retry?')) {
-                            window.location.reload();
-                        } else {
-                            // Fallback to welcome
-                            window.location.href = '/pages/welcome.html' + (referralCode ? '?ref=' + referralCode : '');
-                        }
-                    }, 2000);
+                    isLoggedIn = app.checkAuth ? app.checkAuth() : false;
+                } catch (initErr) {
+                    console.warn('[Splash] Init error, defaulting to welcome.', initErr);
+                    isLoggedIn = false;
                 }
+
+                updateProgress(90, isLoggedIn ? 'Welcome back!' : 'Preparing...');
+                clearInterval(loadInterval);
+                updateProgress(100, 'Ready!');
+
+                const target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
+                setTimeout(() => safeRedirect(target), 400);
+
+            } catch (err) {
+                console.error('[Splash] Load failed, redirecting to welcome:', err);
+                clearInterval(loadInterval);
+                loadingText.style.color = 'rgba(255,255,255,0.5)';
+                loadingText.textContent = 'Continuing...';
+                setTimeout(() => safeRedirect('/pages/welcome.html'), 600);
             }
+        }
 
-            // ===== START LOADING =====
-            // Wait a moment for the splash to be visible, then start loading
-            setTimeout(loadApp, 400);
+        // ===== START =====
+        setTimeout(loadApp, 300);
 
-            // ===== OFFLINE / ONLINE HANDLING =====
-            window.addEventListener('offline', () => {
-                loadingText.textContent = 'You are offline. Using cached resources.';
-                loadingText.style.color = 'rgba(255,255,255,0.7)';
-            });
-            window.addEventListener('online', () => {
-                loadingText.textContent = 'Back online. Syncing...';
-                loadingText.style.color = 'rgba(255,255,255,0.7)';
-                setTimeout(() => {
-                    loadingText.textContent = 'Loading...';
-                    loadingText.style.color = '';
-                }, 1500);
-            });
+        // ===== SAFETY TIMEOUT =====
+        setTimeout(() => {
+            if (progress < 95) {
+                console.warn('[Splash] Timed out, redirecting to welcome.');
+                clearInterval(loadInterval);
+                safeRedirect('/pages/welcome.html');
+            }
+        }, 10000);
 
-            // ===== SAFETY TIMEOUT (if everything fails) =====
-            setTimeout(() => {
-                if (progress < 95) {
-                    console.warn('[Splash] Loading timed out, redirecting to welcome.');
-                    clearInterval(loadInterval);
-                    window.location.href = '/pages/welcome.html' + (referralCode ? '?ref=' + referralCode : '');
-                }
-            }, 12000);
-
-        })();
+        // ===== OFFLINE / ONLINE (just info) =====
+        window.addEventListener('offline', () => {
+            loadingText.textContent = 'Offline mode...';
+        });
+        window.addEventListener('online', () => {
+            loadingText.textContent = 'Online, loading...';
+        });
     </script>
 </body>
 </html>

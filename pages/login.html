@@ -2,15 +2,291 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Login – MedHub</title>
 
-    <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/css/common.css" media="all">
-    <link rel="stylesheet" href="/css/login.css" media="all">
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="stylesheet" href="/css/common.css" media="all" />
+    <link rel="stylesheet" href="/css/login.css" media="all" />
 
-    <!-- Auth + validation + security for fingerprint -->
+    <style>
+        /* ===== header fix: logo left · theme right ===== */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 2rem;
+            background: var(--surface, #fff);
+            border-bottom: 1px solid var(--border, #e2e8f0);
+        }
+
+        header .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 700;
+            font-size: 1.25rem;
+            color: var(--text-primary, #0f172a);
+        }
+
+        header .logo img {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+        }
+
+        header .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border, #e2e8f0);
+            border-radius: 9999px;
+            padding: 0.4rem 0.9rem;
+            font-size: 1.25rem;
+            cursor: pointer;
+            line-height: 1;
+            transition: background 0.2s, border-color 0.2s;
+            color: var(--text-primary, #0f172a);
+        }
+
+        header .btn-outline:hover {
+            background: var(--hover-bg, #f1f5f9);
+            border-color: var(--text-muted, #94a3b8);
+        }
+
+        /* ===== form container ===== */
+        .form-container {
+            max-width: 450px;
+            margin: 3rem auto;
+            background: var(--surface, #fff);
+            border: 1px solid var(--border, #e2e8f0);
+            border-radius: var(--radius-lg, 16px);
+            padding: 2rem;
+            box-shadow: var(--shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.08));
+        }
+
+        .form-container h2 {
+            margin-bottom: 1.5rem;
+            color: var(--text-primary, #0f172a);
+        }
+
+        .form-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .form-row label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary, #475569);
+            font-size: 0.95rem;
+        }
+
+        .form-row .btn-link {
+            background: transparent;
+            border: none;
+            color: #2563eb;
+            font-weight: 500;
+            cursor: pointer;
+            font-size: 0.95rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .form-row .btn-link:hover {
+            background: var(--hover-bg, #f1f5f9);
+            text-decoration: underline;
+        }
+
+        .form-group {
+            position: relative;
+            margin-bottom: 1.25rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.4rem;
+            font-weight: 500;
+            color: var(--text-primary, #0f172a);
+            font-size: 0.95rem;
+        }
+
+        .form-group input[type="text"],
+        .form-group input[type="password"] {
+            width: 100%;
+            padding: 0.7rem 2.5rem 0.7rem 1rem;
+            border: 1px solid var(--border, #e2e8f0);
+            border-radius: 8px;
+            background: var(--bg, #f8fafc);
+            color: var(--text-primary, #0f172a);
+            font-size: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        .reveal-btn {
+            position: absolute;
+            right: 0.75rem;
+            top: 70%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--text-muted, #94a3b8);
+            padding: 0.25rem;
+            cursor: pointer;
+            font-size: 1.1rem;
+            transition: color 0.2s;
+        }
+
+        .reveal-btn:hover {
+            color: var(--text-primary, #0f172a);
+        }
+
+        .error-message {
+            color: #dc2626;
+            font-size: 0.8rem;
+            margin-top: 0.3rem;
+            min-height: 1.2rem;
+        }
+
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .action-buttons .btn-primary {
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            border: none;
+            background: #2563eb;
+            color: #fff;
+        }
+
+        .action-buttons .btn-primary:hover {
+            background: #1d4ed8;
+            transform: scale(1.01);
+        }
+
+        .action-buttons .btn-secondary {
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            background: transparent;
+            color: var(--text-primary, #0f172a);
+            border: 1px solid var(--border, #e2e8f0);
+        }
+
+        .action-buttons .btn-secondary:hover {
+            background: var(--hover-bg, #f1f5f9);
+        }
+
+        .security-note {
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border, #e2e8f0);
+            font-size: 0.75rem;
+            color: var(--text-muted, #94a3b8);
+            text-align: center;
+        }
+
+        /* ===== footer / back button with border ===== */
+        footer {
+            text-align: center;
+            padding: 2rem 1rem;
+        }
+
+        footer .btn-text {
+            background: transparent;
+            border: 1.5px solid var(--border, #e2e8f0);
+            border-radius: 9999px;
+            padding: 0.6rem 1.8rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--text-primary, #0f172a);
+            transition: background 0.2s, border-color 0.2s, transform 0.1s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        footer .btn-text:hover {
+            background: var(--hover-bg, #f1f5f9);
+            border-color: var(--text-muted, #94a3b8);
+            transform: scale(1.02);
+        }
+
+        /* ===== page container ===== */
+        .page-container {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg, #f8fafc);
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        /* ===== light / dark variables ===== */
+        :root {
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --border: #e2e8f0;
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --hover-bg: #f1f5f9;
+            --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.08);
+            --radius-lg: 16px;
+        }
+
+        [data-theme="dark"] {
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-muted: #64748b;
+            --hover-bg: #334155;
+            --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        /* ===== responsive ===== */
+        @media (max-width: 640px) {
+            header {
+                padding: 0.75rem 1rem;
+            }
+            header .logo span {
+                font-size: 1rem;
+            }
+            .form-container {
+                margin: 1.5rem 1rem;
+                padding: 1.5rem;
+            }
+            .form-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+
     <script type="module" src="/scripts/utils.js"></script>
     <script type="module" src="/scripts/ui.js"></script>
     <script type="module" src="/scripts/router.js"></script>
@@ -22,20 +298,20 @@
 
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/service-worker.js').catch(() => { });
+            navigator.serviceWorker.register('/service-worker.js').catch(() => {});
         }
     </script>
 
     <script type="module">
         import * as app from '../scripts/app.js';
-        import * as auth from '../scripts/auth.js';    // ✅ correct import
+        import * as auth from '../scripts/auth.js';
         import * as ui from '../scripts/ui.js';
         import * as router from '../scripts/router.js';
         import * as validation from '../scripts/validation.js';
         import * as security from '../scripts/security.js';
         import * as utils from '../scripts/utils.js';
 
-        window.addEventListener('load', function () {
+        window.addEventListener('load', function() {
             ui.applyTheme();
             if (app.checkAuth()) {
                 router.navigateTo('subjects.html');
@@ -52,7 +328,7 @@
             }
         });
 
-        window.handleLogin = async function (event) {
+        window.handleLogin = async function(event) {
             event.preventDefault();
             const email = document.getElementById('email').value.trim();
             const password = document.getElementById('password').value;
@@ -77,7 +353,6 @@
                     timezone: new Date().getTimezoneOffset()
                 };
 
-                // ✅ Use auth.login, not app.login
                 const user = await auth.login(email, password, { deviceFingerprint, deviceInfo });
 
                 if (remember) utils.setLocalStorage('rememberedEmail', email);
@@ -95,7 +370,7 @@
             }
         };
 
-        window.forgotPassword = function () {
+        window.forgotPassword = function() {
             router.navigateTo('forgot-password.html');
         };
     </script>
@@ -103,57 +378,74 @@
 
 <body>
     <div class="page-container">
+
+        <!-- ===== HEADER: logo left · theme right ===== -->
         <header>
             <div class="logo">
-                <img src="/assets/images/logo.png" alt="Logo" width="40" height="40">
+                <img src="/assets/images/logo.png" alt="MedHub Logo" width="40" height="40" />
                 <span>MedHub</span>
             </div>
-            <button onclick="ui.toggleTheme()" class="btn-outline">🌓</button>
+            <button onclick="ui.toggleTheme()" class="btn-outline" aria-label="Toggle theme">
+                🌓
+            </button>
         </header>
 
+        <!-- ===== LOGIN FORM ===== -->
         <main class="form-container">
             <h2>Login to your account</h2>
 
             <form id="login-form" onsubmit="handleLogin(event)">
                 <div class="form-group">
                     <label for="email">Email or Phone (254...)</label>
-                    <input type="text" id="email" name="email" placeholder="e.g., 254712345678 or student@example.com"
-                        autocomplete="username" required>
+                    <input type="text" id="email" name="email"
+                    placeholder="e.g., 254712345678 or student@example.com"
+                    autocomplete="username" required />
                     <div class="error-message" data-for="email"></div>
                 </div>
 
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password" placeholder="••••••••"
-                        autocomplete="current-password" required>
+                    <input type="password" id="password" name="password"
+                    placeholder="••••••••" autocomplete="current-password" required />
                     <button type="button" onclick="ui.togglePasswordVisibility('password')"
-                        class="reveal-btn">👁️</button>
-                    <div class="error-message" data-for="password"></div>
-                </div>
+                    class="reveal-btn" aria-label="Toggle password visibility">
+                    👁️
+                </button>
+                <div class="error-message" data-for="password"></div>
+            </div>
 
-                <div class="form-row">
-                    <label>
-                        <input type="checkbox" id="remember"> Remember me
-                    </label>
-                    <button type="button" onclick="forgotPassword()" class="btn-link">Forgot password?</button>
-                </div>
+            <div class="form-row">
+                <label>
+                    <input type="checkbox" id="remember" /> Remember me
+                </label>
+                <button type="button" onclick="forgotPassword()" class="btn-link">
+                    Forgot password?
+                </button>
+            </div>
 
-                <div class="action-buttons">
-                    <button type="submit" class="btn-primary">Login</button>
-                    <button type="button" onclick="router.navigateTo('signup.html')" class="btn-secondary">Create
-                        account</button>
-                </div>
-            </form>
+            <div class="action-buttons">
+                <button type="submit" class="btn-primary">Login</button>
+                <button type="button" onclick="router.navigateTo('signup.html')" class="btn-secondary">
+                    Create account
+                </button>
+            </div>
+        </form>
 
-            <p class="security-note">🔒 Time manipulation will lock your account. Never share password.</p>
-        </main>
+        <p class="security-note">
+            🔒 Time manipulation will lock your account. Never share password.
+        </p>
+    </main>
 
-        <footer>
-            <button onclick="router.navigateTo('welcome.html')" class="btn-text">← Back</button>
-        </footer>
-    </div>
+    <!-- ===== FOOTER with bordered back button ===== -->
+    <footer>
+        <button onclick="router.navigateTo('welcome.html')" class="btn-text">
+            ← Back
+        </button>
+    </footer>
 
-    <script data-lazy data-src="/scripts/offline.js"></script>
+</div>
+
+<script data-lazy data-src="/scripts/offline.js"></script>
 </body>
 
 </html>

@@ -12,6 +12,7 @@
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.4.2",
     "@capacitor/core": "^8.5.0",
+    "@capacitor/screen-orientation": "^8.0.1",
     "convex": "^1.32.0",
     "css-tree": "^3.2.1",
     "parse5": "^8.0.1",

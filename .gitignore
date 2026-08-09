@@ -8,3 +8,4 @@ android/local.properties
 medhub-keystore.jks
 medhub-keystore.b64
 android/keystore.properties
+android/medhub-keystore.jks
