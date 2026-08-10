@@ -6,7 +6,11 @@
     <title>MedHub</title>
     <link rel="manifest" href="/manifest.json" />
     <link rel="preload" href="/assets/images/splash.png" as="image" />
-
+<script>
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/service-worker.js');
+    }
+</script>
     <style>
         /* ===== RESET & BASE ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -211,7 +215,7 @@
             refBadgeCode.textContent = referralCode;
         }
 
-        // ===== ORIENTATION LOCK (dynamic import, no top-level await) =====
+        // ===== ORIENTATION LOCK =====
         let screenOrientation = null;
 
         async function initOrientation() {
@@ -226,13 +230,14 @@
         }
         initOrientation();
 
-        // ===== HELPER: Safe redirect with unlock =====
+        // ===== SAFE REDIRECT (unlock + referral) =====
         function safeRedirect(targetPath) {
             if (screenOrientation) {
                 screenOrientation.unlock().catch(() => {});
             }
             let target = targetPath;
-            if (referralCode) {
+            // Add referral only if not already present
+            if (referralCode && !target.includes('ref=')) {
                 const sep = target.includes('?') ? '&' : '?';
                 target += sep + 'ref=' + encodeURIComponent(referralCode);
             }
@@ -265,7 +270,7 @@
             if (current >= 85) clearInterval(loadInterval);
         }, 120);
 
-        // ===== MAIN LOADER – SILENT FALLBACK =====
+        // ===== MAIN LOADER – with Deep Link detection =====
         async function loadApp() {
             try {
                 updateProgress(15, 'Loading core...');
@@ -287,11 +292,32 @@
                     isLoggedIn = false;
                 }
 
+                // ----- DETECT DEEP LINK -----
+                // Full path including query and hash
+                const fullPath = window.location.pathname + window.location.search + window.location.hash;
+                // Check if it's a deep link (not just the root or index.html)
+                const isDeepLink = fullPath !== '/' && fullPath !== '/index.html' && !fullPath.startsWith('/?') && !fullPath.startsWith('/#');
+
+                let target;
+                if (isDeepLink) {
+                    console.log('[Splash] Deep link detected:', fullPath);
+                    if (isLoggedIn) {
+                        // Logged in → go directly to the deep link
+                        target = fullPath;
+                    } else {
+                        // Not logged in → store deep link and go to welcome
+                        sessionStorage.setItem('redirectAfterLogin', fullPath);
+                        target = '/pages/welcome.html';
+                    }
+                } else {
+                    // No deep link → standard auth flow
+                    target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
+                }
+
                 updateProgress(90, isLoggedIn ? 'Welcome back!' : 'Preparing...');
                 clearInterval(loadInterval);
                 updateProgress(100, 'Ready!');
 
-                const target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
                 setTimeout(() => safeRedirect(target), 400);
 
             } catch (err) {
@@ -315,7 +341,7 @@
             }
         }, 10000);
 
-        // ===== OFFLINE / ONLINE (just info) =====
+        // ===== OFFLINE / ONLINE =====
         window.addEventListener('offline', () => {
             loadingText.textContent = 'Offline mode...';
         });
