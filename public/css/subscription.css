@@ -15,7 +15,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    flex-wrap: nowrap;          /* single line */
+    flex-wrap: nowrap;
 }
 
 .header-right {
@@ -32,6 +32,7 @@
 .sub-header-bottom h1 {
     font-size: 1.4rem;
     margin: 0;
+    color: var(--text-primary);
 }
 
 /* Status area */
@@ -112,7 +113,7 @@
     align-items: center;
     gap: 1rem;
     flex-wrap: wrap;
-    display: none;            /* hidden unless shown via JS */
+    display: none;
 }
 
 /* ===== MAIN BODY ===== */
@@ -441,6 +442,7 @@
     background: var(--accent-dark);
 }
 
+/* ===== VERIFICATION STATUS (kept as universal alert colors) ===== */
 .verification-status {
     margin-top: 1rem;
     padding: 0.75rem;

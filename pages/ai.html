@@ -209,7 +209,7 @@
                         <div style="font-weight: 600; font-size: 1.2rem;">MedHub</div>
                     </div>
                     <div class="right-controls">
-                        <a href="pages/performance.html" target="_blank" class="performance-btn"><i class="fas fa-chart-line"></i> Performance</a>
+                        <a href="p/performance.html" target="_blank" class="performance-btn"><i class="fas fa-chart-line"></i> Performance</a>
                         <div class="model-selector" id="modelSelectorBtn">
                             <span id="currentModel">MedHub-1.0</span>
                             <i class="fas fa-chevron-down" style="font-size: 0.8rem;"></i>
@@ -285,33 +285,28 @@
         import * as router from '/scripts/router.js';
         import * as utils from '/scripts/utils.js';
         import AIChatUI from '/scripts/ai-chat-ui.js';
-        
         import ai from '/scripts/ai.js';
 
         // ─── Dynamic header offset – fixes overlap on any screen size ─────────
-function updateHeaderOffset() {
-    const header = document.getElementById('topBar');
-    if (!header) return;
-
-    const headerHeight = header.offsetHeight;
-    document.documentElement.style.setProperty('--header-height', headerHeight + 'px');
-
-    // Calculate the true visible height for the app area
-    const appHeight = window.innerHeight - headerHeight;
-    document.documentElement.style.setProperty('--app-height', appHeight + 'px');
-}
+        function updateHeaderOffset() {
+            const header = document.getElementById('topBar');
+            if (!header) return;
+            const headerHeight = header.offsetHeight;
+            document.documentElement.style.setProperty('--header-height', headerHeight + 'px');
+            const appHeight = window.innerHeight - headerHeight;
+            document.documentElement.style.setProperty('--app-height', appHeight + 'px');
+        }
         window.addEventListener('resize', updateHeaderOffset);
         if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', updateHeaderOffset);
-    window.visualViewport.addEventListener('scroll', updateHeaderOffset);
-}
+            window.visualViewport.addEventListener('resize', updateHeaderOffset);
+            window.visualViewport.addEventListener('scroll', updateHeaderOffset);
+        }
         // ───────────────────────────────────────────────────────────────────────
 
         (async function init() {
             await app.initializeApp();
             ui.applyTheme();
 
-            // Measure header now (it exists in the DOM)
             updateHeaderOffset();
 
             if (!app.checkAuth()) {
@@ -338,7 +333,6 @@ function updateHeaderOffset() {
                 subscribeBtn.style.display = 'inline-block';
             }
 
-            // Recalculate header offset after status change (it might affect height)
             updateHeaderOffset();
 
             // Initialize chat UI
@@ -348,8 +342,58 @@ function updateHeaderOffset() {
             // Hide shimmer, show real content
             document.getElementById('shimmer-content').style.display = 'none';
             document.getElementById('real-content').style.display = 'block';
-            updateHeaderOffset();                       // measure the header now that it's visible
-            requestAnimationFrame(updateHeaderOffset);  // safety – measure again on next frame
+            updateHeaderOffset();
+            requestAnimationFrame(updateHeaderOffset);
+
+            // ─── Fix: theme toggle in settings modal ──────────────────────────
+            const themeToggleBtn = document.getElementById('themeToggle');
+            if (themeToggleBtn) {
+                themeToggleBtn.addEventListener('click', () => {
+                    ui.toggleTheme();
+                    // Optional: close modal after toggling
+                    // document.getElementById('settingsModal').style.display = 'none';
+                });
+            }
+
+            // ─── Settings modal open/close ────────────────────────────────────
+            const settingsBtn = document.getElementById('settingsBtn');
+            const settingsModal = document.getElementById('settingsModal');
+            const closeModalBtn = document.getElementById('closeModalBtn');
+
+            if (settingsBtn && settingsModal && closeModalBtn) {
+                settingsBtn.addEventListener('click', () => {
+                    settingsModal.style.display = 'flex';
+                });
+                closeModalBtn.addEventListener('click', () => {
+                    settingsModal.style.display = 'none';
+                });
+                settingsModal.addEventListener('click', (e) => {
+                    if (e.target === settingsModal) {
+                        settingsModal.style.display = 'none';
+                    }
+                });
+            }
+
+            // ─── Clear history (example) ──────────────────────────────────────
+            const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+            if (clearHistoryBtn) {
+                clearHistoryBtn.addEventListener('click', () => {
+                    if (confirm('Clear all chat history?')) {
+                        // Implement clear history logic
+                        ui.showToast('Chat history cleared.', 'info');
+                    }
+                });
+            }
+
+            // ─── Model selector ──────────────────────────────────────────────
+            const modelSelect = document.getElementById('modelSelect');
+            const currentModelSpan = document.getElementById('currentModel');
+            if (modelSelect && currentModelSpan) {
+                modelSelect.addEventListener('change', () => {
+                    currentModelSpan.textContent = modelSelect.value;
+                    // Optionally persist selection
+                });
+            }
         })();
     </script>
 </body>

@@ -9,52 +9,18 @@
     <link rel="stylesheet" href="/css/common.css" media="all">
     <link rel="stylesheet" href="/css/subjects.css" media="all">
 
-    <!-- Inline dark theme fallback + additional styles for toggle and search -->
+    <!-- Inline theme fallback + additional styles for toggle and search -->
     <style id="theme-style">
         /* ---- Base dark fallback (before JS theme) ---- */
         body {
-            background: #1a1a2e;
-            color: #eee;
+            background: var(--bg-primary, #1a1a2e);
+            color: var(--text-primary, #eee);
             margin: 0;
             padding: 0;
             font-family: system-ui, -apple-system, sans-serif;
         }
 
-        /* ---- Fixed header (dark background) ---- */
-        header {
-            background: #1e1e2f !important;
-            border-bottom: 1px solid #333;
-            z-index: 100;
-        }
-        .logo {
-            color: #eee;
-        }
-        .header-actions button {
-            color: #ccc;
-        }
-
-        /* ---- Second bar (greeting + sub status) ---- */
-        .second-bar {
-            background: #1e1e2f;
-            border-bottom: 1px solid #333;
-        }
-
-        /* ---- Quick actions banner ---- */
-        .welcome-banner {
-            background: #1e1e2f;
-            border: 1px solid #333;
-        }
-
-        /* ---- Fixed footer ---- */
-        .app-footer {
-            background: #1e1e2f !important;
-            border-top: 1px solid #333;
-        }
-        .footer-btn {
-            color: #888;
-        }
-
-        /* ---- Shimmer cards (dark theme) ---- */
+        /* ---- Shimmer cards (keep dark mode as requested) ---- */
         .shimmer-card {
             background: #2a2a3e;
             border: 1px solid #444;
@@ -143,6 +109,7 @@
             }
         }
 
+        /* ---- Notification badge (theme‑aware) ---- */
         .notification-btn {
             position: relative;
         }
@@ -161,17 +128,17 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 2px solid var(--bg-card, #1e1e2f);
+            border: 2px solid var(--bg-card, #ffffff);
             line-height: 1;
         }
         .dark-theme .notification-badge {
-            border-color: #1e1e2f;
+            border-color: var(--bg-card, #1e1e2f);
         }
-        body.light-mode .notification-badge {
-            border-color: #ffffff;
+        body:not(.dark-theme) .notification-badge {
+            border-color: var(--bg-card, #ffffff);
         }
 
-        /* ---- Toggle and search styles ---- */
+        /* ---- Toggle and search styles (theme‑aware) ---- */
         .subjects-header {
             display: flex;
             flex-wrap: wrap;
@@ -206,7 +173,7 @@
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         .subjects-toggle button:hover:not(.active) {
-            background: var(--bg-hover);
+            background: var(--bg-hover, var(--border));
         }
 
         .search-bar {
@@ -273,9 +240,10 @@
         main h1 {
             margin: 0.5rem 0 0 0.5rem;
             font-size: 1.4rem;
+            color: var(--text-primary);
         }
 
-        /* ---- REFERRAL BUTTON WITH ANIMATED BORDER ---- */
+        /* ---- Referral button with animated border (kept as before) ---- */
         @property --border-angle {
             syntax: '<angle>';
             initial-value: 0deg;

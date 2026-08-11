@@ -6,11 +6,11 @@
     <title>MedHub</title>
     <link rel="manifest" href="/manifest.json" />
     <link rel="preload" href="/assets/images/splash.png" as="image" />
-<script>
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/service-worker.js');
-    }
-</script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/service-worker.js');
+        }
+    </script>
     <style>
         /* ===== RESET & BASE ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -182,16 +182,72 @@
     </div>
 
     <script type="module">
-        // ===== DOM refs =====
+        // ===================================================================
+        // 1. IMPORTS
+        // ===================================================================
+        import { App } from '@capacitor/app';
+
+        // ===================================================================
+        // 2. DOM REFS
+        // ===================================================================
         const progressFill = document.getElementById('progressFill');
         const loadingText = document.getElementById('loadingText');
         const spinner = document.getElementById('spinner');
         const referralBadge = document.getElementById('referralBadge');
         const refBadgeCode = document.getElementById('refBadgeCode');
 
-        // ===== REFERRAL DETECTION =====
-        function detectReferral() {
-            const params = new URLSearchParams(window.location.search);
+        // ===================================================================
+        // 3. STATE
+        // ===================================================================
+        let pendingAppUrl = null;
+        let appInitialized = false;
+        let appAuthenticated = false;
+        let referralCode = null;
+
+        // ===================================================================
+        // 4. DEEP-LINK NORMALISER
+        // ===================================================================
+        function normalizeMedHubUrl(url) {
+            try {
+                const parsed = new URL(url);
+                // Accept only our official domain over HTTPS
+                if (parsed.protocol !== 'https:' || parsed.hostname !== 'medhub.edgeone.app') {
+                    console.warn('[DeepLink] Rejected external URL:', url);
+                    return null;
+                }
+                // Return pathname + search + hash (never hard-coded)
+                return parsed.pathname + parsed.search + parsed.hash;
+            } catch (error) {
+                console.error('[DeepLink] Invalid URL:', url, error);
+                return null;
+            }
+        }
+
+        function isRootDestination(destination) {
+            try {
+                const parsed = new URL(destination, 'https://medhub.edgeone.app');
+                return parsed.pathname === '/' || parsed.pathname === '/index.html';
+            } catch {
+                return false;
+            }
+        }
+
+        // ===================================================================
+        // 5. REFERRAL DETECTION (from URL or localStorage)
+        // ===================================================================
+        function detectReferral(sourceUrl = null) {
+            let params;
+            if (sourceUrl) {
+                try {
+                    const parsed = new URL(sourceUrl, 'https://medhub.edgeone.app');
+                    params = parsed.searchParams;
+                } catch {
+                    params = new URLSearchParams(window.location.search);
+                }
+            } else {
+                params = new URLSearchParams(window.location.search);
+            }
+
             let code = params.get('ref') || params.get('referral') || params.get('code');
             if (code) {
                 code = code.trim();
@@ -209,13 +265,68 @@
             return null;
         }
 
-        const referralCode = detectReferral();
-        if (referralCode) {
-            referralBadge.style.display = 'block';
-            refBadgeCode.textContent = referralCode;
+        // ===================================================================
+        // 6. CAPACITOR APP PLUGIN – capture launch & open events
+        // ===================================================================
+        async function captureLaunchUrl() {
+            try {
+                const result = await App.getLaunchUrl();
+                if (result?.url) {
+                    console.log('[DeepLink] Launch URL:', result.url);
+                    const normalized = normalizeMedHubUrl(result.url);
+                    if (normalized) {
+                        pendingAppUrl = normalized;
+                        console.log('[DeepLink] Pending destination:', pendingAppUrl);
+                    }
+                }
+            } catch (error) {
+                console.warn('[DeepLink] Could not obtain launch URL:', error);
+            }
         }
 
-        // ===== ORIENTATION LOCK =====
+        function registerAppUrlListener() {
+            App.addListener('appUrlOpen', ({ url }) => {
+                console.log('[DeepLink] App URL opened:', url);
+                const destination = normalizeMedHubUrl(url);
+                if (!destination) return;
+
+                if (appInitialized) {
+                    processDestination(destination);
+                } else {
+                    pendingAppUrl = destination;
+                }
+            });
+        }
+
+        // ===================================================================
+        // 7. DESTINATION PROCESSOR (generic)
+        // ===================================================================
+        function processDestination(destination) {
+            if (!destination) return;
+
+            // Root path → treat as referral only, no deep‑link routing
+            if (isRootDestination(destination)) {
+                console.log('[DeepLink] Root destination – handled by referral logic.');
+                // The referral code was already extracted from the incoming URL
+                // by detectReferral, so nothing else needed.
+                return;
+            }
+
+            console.log('[DeepLink] Processing destination:', destination);
+
+            if (appAuthenticated) {
+                console.log('[DeepLink] Authenticated → navigating to:', destination);
+                safeRedirect(destination);
+            } else {
+                console.log('[DeepLink] Authentication required – storing for later.');
+                sessionStorage.setItem('redirectAfterLogin', destination);
+                safeRedirect('/pages/welcome.html');
+            }
+        }
+
+        // ===================================================================
+        // 8. ORIENTATION LOCK
+        // ===================================================================
         let screenOrientation = null;
 
         async function initOrientation() {
@@ -230,13 +341,15 @@
         }
         initOrientation();
 
-        // ===== SAFE REDIRECT (unlock + referral) =====
+        // ===================================================================
+        // 9. SAFE REDIRECT (unlock + referral append)
+        // ===================================================================
         function safeRedirect(targetPath) {
             if (screenOrientation) {
                 screenOrientation.unlock().catch(() => {});
             }
             let target = targetPath;
-            // Add referral only if not already present
+            // Append referral code only if not already present
             if (referralCode && !target.includes('ref=')) {
                 const sep = target.includes('?') ? '&' : '?';
                 target += sep + 'ref=' + encodeURIComponent(referralCode);
@@ -245,7 +358,9 @@
             window.location.href = target;
         }
 
-        // ===== PROGRESS UPDATER =====
+        // ===================================================================
+        // 10. PROGRESS UPDATER
+        // ===================================================================
         let progress = 0;
         const MIN_PROGRESS = 10;
         const MAX_PROGRESS = 100;
@@ -260,7 +375,9 @@
             }
         }
 
-        // ===== SIMULATE LOADING ANIMATION =====
+        // ===================================================================
+        // 11. LOADING ANIMATION (simulated)
+        // ===================================================================
         let loadInterval = setInterval(() => {
             const step = 1 + Math.random() * 2;
             let current = parseFloat(progressFill.style.width) || MIN_PROGRESS;
@@ -270,9 +387,34 @@
             if (current >= 85) clearInterval(loadInterval);
         }, 120);
 
-        // ===== MAIN LOADER – with Deep Link detection =====
+        // ===================================================================
+        // 12. MAIN LOADER (with unified deep‑link handling)
+        // ===================================================================
         async function loadApp() {
             try {
+                // ---- (A) Capture Android launch URL BEFORE loading anything else ----
+                await captureLaunchUrl();
+                registerAppUrlListener();
+
+                // ---- (B) Initial referral detection from the *launch* URL if present ----
+                let initialReferral = null;
+                if (pendingAppUrl) {
+                    // Build a full URL to extract query params
+                    const fullUrl = 'https://medhub.edgeone.app' + pendingAppUrl;
+                    initialReferral = detectReferral(fullUrl);
+                } else {
+                    initialReferral = detectReferral(); // fallback to window.location
+                }
+                // Store globally
+                referralCode = initialReferral;
+
+                // Show referral badge if we have one
+                if (referralCode) {
+                    referralBadge.style.display = 'block';
+                    refBadgeCode.textContent = referralCode;
+                }
+
+                // ---- (C) Load modules ----
                 updateProgress(15, 'Loading core...');
                 await import('/scripts/utils.js');
                 updateProgress(30, 'Loading database...');
@@ -282,6 +424,7 @@
                 updateProgress(55, 'Loading app...');
                 const app = await import('/scripts/app.js');
 
+                // ---- (D) Initialize app and check auth ----
                 updateProgress(65, 'Initializing...');
                 let isLoggedIn = false;
                 try {
@@ -291,29 +434,36 @@
                     console.warn('[Splash] Init error, defaulting to welcome.', initErr);
                     isLoggedIn = false;
                 }
+                appAuthenticated = isLoggedIn;
+                appInitialized = true;
 
-                // ----- DETECT DEEP LINK -----
-                // Full path including query and hash
-                const fullPath = window.location.pathname + window.location.search + window.location.hash;
-                // Check if it's a deep link (not just the root or index.html)
-                const isDeepLink = fullPath !== '/' && fullPath !== '/index.html' && !fullPath.startsWith('/?') && !fullPath.startsWith('/#');
-
+                // ---- (E) Decide target ----
                 let target;
-                if (isDeepLink) {
-                    console.log('[Splash] Deep link detected:', fullPath);
-                    if (isLoggedIn) {
-                        // Logged in → go directly to the deep link
-                        target = fullPath;
+
+                if (pendingAppUrl) {
+                    // We have a deep link from Android
+                    const destination = pendingAppUrl;
+                    console.log('[Splash] Incoming URL:', destination);
+
+                    if (isRootDestination(destination)) {
+                        // Root URL → referral only; use standard auth flow
+                        target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
                     } else {
-                        // Not logged in → store deep link and go to welcome
-                        sessionStorage.setItem('redirectAfterLogin', fullPath);
-                        target = '/pages/welcome.html';
+                        // Any other path → treat as a page deep link
+                        if (isLoggedIn) {
+                            target = destination; // go directly
+                        } else {
+                            // Not logged in – store destination for after login
+                            sessionStorage.setItem('redirectAfterLogin', destination);
+                            target = '/pages/welcome.html';
+                        }
                     }
                 } else {
-                    // No deep link → standard auth flow
+                    // No deep link → standard launch
                     target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
                 }
 
+                // ---- (F) Finish and redirect ----
                 updateProgress(90, isLoggedIn ? 'Welcome back!' : 'Preparing...');
                 clearInterval(loadInterval);
                 updateProgress(100, 'Ready!');
@@ -329,10 +479,14 @@
             }
         }
 
-        // ===== START =====
+        // ===================================================================
+        // 13. START
+        // ===================================================================
         setTimeout(loadApp, 300);
 
-        // ===== SAFETY TIMEOUT =====
+        // ===================================================================
+        // 14. SAFETY TIMEOUT
+        // ===================================================================
         setTimeout(() => {
             if (progress < 95) {
                 console.warn('[Splash] Timed out, redirecting to welcome.');
@@ -341,7 +495,9 @@
             }
         }, 10000);
 
-        // ===== OFFLINE / ONLINE =====
+        // ===================================================================
+        // 15. OFFLINE / ONLINE (informational only)
+        // ===================================================================
         window.addEventListener('offline', () => {
             loadingText.textContent = 'Offline mode...';
         });

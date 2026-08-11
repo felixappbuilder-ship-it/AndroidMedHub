@@ -47,28 +47,77 @@ function getErrorMessage(error) {
     return 'An unknown error occurred';
 }
 
-// ==================== TOKEN ERROR HANDLER ====================
+// ==================== TOKEN ERROR HANDLER (async, offline‑friendly) ====================
 
-function handleTokenError(error) {
-    const message = error.message || error.toString();
-    if (message && (
+/**
+ * Handle token errors:
+ * - If offline: keep local user, return true (do nothing).
+ * - If online: try to refresh the token silently.
+ * - If refresh succeeds: return true (continue).
+ * - If refresh fails: clear token and sessionId, but DO NOT clear the local user.
+ *
+ * @param {Error|string} error - The error object or message.
+ * @returns {Promise<boolean>} - true if the error was handled (i.e., caller should stop), false otherwise.
+ */
+async function handleTokenError(error) {
+    const message = error?.message || error?.toString() || '';
+
+    // Check if this is actually a token-related error
+    const isTokenError =
         message.includes('invalid_token') ||
         message.includes('session_expired') ||
         message.includes('verify authentication token') ||
         message.includes('Failed to verify authentication token') ||
         message.includes('Unauthorized') ||
         message.includes('authentication failed') ||
-        message.includes('token')
-    )) {
-        console.warn('[Auth] Token invalid, logging out...');
-        clearToken();
-        utils.removeLocalStorage('sessionId');
-        app.clearUser();
-        ui.showToast('Session expired. Please login again.', 'warning');
-        window.location.href = '/pages/login.html';
-        return true;
+        message.includes('token') ||
+        message.includes('JWT verification error') ||
+        message.includes('jwt expired') ||
+        message.includes('TokenExpiredError');
+
+    if (!isTokenError) {
+        return false;
     }
-    return false;
+
+    // ========================================================
+    // OFFLINE: Never destroy the local user just because the JWT expired.
+    // ========================================================
+    if (!navigator.onLine) {
+        console.warn(
+            '[Auth] Token expired while offline. Keeping local session.'
+        );
+        return true; // handled – do not propagate error further
+    }
+
+    // ========================================================
+    // ONLINE: Try to silently obtain a new JWT first.
+    // ========================================================
+    console.warn('[Auth] Access token invalid/expired. Attempting refresh...');
+
+    const refreshed = await refreshSession();
+
+    if (refreshed) {
+        console.log('[Auth] Token refreshed successfully.');
+        return true; // handled – continue normally
+    }
+
+    // ========================================================
+    // ONLY NOW consider the session genuinely invalid.
+    // ========================================================
+    console.warn('[Auth] Persistent session could not be refreshed.');
+
+    clearToken();
+    utils.removeLocalStorage('sessionId');
+
+    // IMPORTANT: Do NOT delete the cached user here.
+    // It may still be needed for offline operation.
+
+    ui.showToast(
+        'Your session could not be restored. Please login again when online.',
+        'warning'
+    );
+
+    return true;
 }
 
 // ==================== REFERRAL HELPERS ====================
@@ -79,6 +128,47 @@ function getStoredReferralCode() {
 
 function clearStoredReferralCode() {
     utils.removeLocalStorage('referral_code');
+}
+
+// ==================== SESSION REFRESH ====================
+
+/**
+ * Attempt to refresh the JWT using the stored sessionId.
+ * @returns {Promise<boolean>} - true if refresh succeeded, false otherwise.
+ */
+export async function refreshSession() {
+    if (!navigator.onLine) {
+        console.log('[Auth] Offline — cannot refresh token.');
+        return false;
+    }
+
+    const sessionId = utils.getLocalStorage('sessionId');
+
+    if (!sessionId) {
+        console.warn('[Auth] No sessionId available for refresh.');
+        return false;
+    }
+
+    try {
+        const result = await convexHttpClient.action(
+            "auth/actions:refreshSession",
+            { sessionId }
+        );
+
+        if (!result || !result.success || !result.data?.token) {
+            console.warn('[Auth] Session refresh failed:', result?.message);
+            return false;
+        }
+
+        setToken(result.data.token);
+
+        console.log('[Auth] JWT silently refreshed.');
+
+        return true;
+    } catch (error) {
+        console.warn('[Auth] Session refresh error:', error);
+        return false;
+    }
 }
 
 // ==================== LOGIN ====================
@@ -285,7 +375,7 @@ export async function updateProfile(updates) {
         });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -294,7 +384,7 @@ export async function updateProfile(updates) {
         return result.data.user;
     } catch (error) {
         console.error('[Auth] Update profile failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         throw new Error(getErrorMessage(error) || 'Update failed');
     }
 }
@@ -312,7 +402,7 @@ export async function changePassword({ currentPassword, newPassword }) {
         });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -320,7 +410,7 @@ export async function changePassword({ currentPassword, newPassword }) {
         ui.showToast('Password changed successfully. You have been logged out from other devices.', 'success');
     } catch (error) {
         console.error('[Auth] Change password failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         throw new Error(getErrorMessage(error) || 'Password change failed');
     }
 }
@@ -337,7 +427,7 @@ export async function updatePreferences(preferences) {
         });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -345,7 +435,7 @@ export async function updatePreferences(preferences) {
         await app.setUser(result.data.user);
     } catch (error) {
         console.error('[Auth] Update preferences failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         throw new Error(getErrorMessage(error) || 'Update preferences failed');
     }
 }
@@ -361,7 +451,7 @@ export async function exportData() {
         });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -376,7 +466,7 @@ export async function exportData() {
         ui.showToast('Export started', 'success');
     } catch (error) {
         console.error('[Auth] Export data failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         throw new Error(getErrorMessage(error) || 'Export failed');
     }
 }
@@ -393,7 +483,7 @@ export async function deleteAccount(password) {
         });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -402,7 +492,7 @@ export async function deleteAccount(password) {
         ui.showToast('Account deleted', 'info');
     } catch (error) {
         console.error('[Auth] Delete account failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         const msg = getErrorMessage(error);
         if (msg.includes('Invalid password')) {
             throw new Error('Password incorrect');
@@ -411,25 +501,18 @@ export async function deleteAccount(password) {
     }
 }
 
-// ==================== SESSION MANAGEMENT ====================
+// ==================== SESSION MANAGEMENT (2‑hour timer removed) ====================
 
-let sessionTimeout;
-const SESSION_DURATION = 2 * 60 * 60 * 1000; // 2 hours
+// JWT/session lifetime is controlled by the backend.
+// Do NOT force logout from the frontend based on elapsed time.
 
 export function startSession() {
-    if (sessionTimeout) clearTimeout(sessionTimeout);
-    sessionTimeout = setTimeout(() => {
-        ui.showToast('Session expired. Please login again.', 'warning');
-        logout();
-        window.location.href = '/pages/login.html';
-    }, SESSION_DURATION);
+    console.log('[Auth] Persistent session active. No frontend auto-logout timer.');
 }
 
 export function extendSession() {
-    if (sessionTimeout) {
-        clearTimeout(sessionTimeout);
-        startSession();
-    }
+    // Kept for backwards compatibility with existing code.
+    startSession();
 }
 
 // ==================== DEVICE MANAGEMENT ====================
@@ -459,7 +542,7 @@ export async function logoutDevice(fingerprint) {
         });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -467,7 +550,7 @@ export async function logoutDevice(fingerprint) {
         ui.showToast('Device logged out', 'success');
     } catch (error) {
         console.error('[Auth] Logout device failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         throw new Error(getErrorMessage(error) || 'Failed to logout device');
     }
 }
@@ -479,7 +562,7 @@ export async function logoutAllDevices() {
         const result = await convexHttpClient.action("users/mutations:logoutAllDevices", { token });
         if (!result.success) {
             if (result.error === 'invalid_token' || result.message?.includes('token')) {
-                handleTokenError(new Error(result.message));
+                await handleTokenError(new Error(result.message));
                 return;
             }
             throw new Error(result.message);
@@ -487,7 +570,7 @@ export async function logoutAllDevices() {
         ui.showToast('All other devices logged out', 'success');
     } catch (error) {
         console.error('[Auth] Logout all devices failed', error);
-        if (handleTokenError(error)) return;
+        if (await handleTokenError(error)) return;
         throw new Error(getErrorMessage(error) || 'Failed to logout all devices');
     }
 }
@@ -498,6 +581,7 @@ window.auth = {
     login,
     register,
     logout,
+    refreshSession,                // ✅ added
     getSecurityQuestions,
     verifySecurityAnswers,
     resetPassword,

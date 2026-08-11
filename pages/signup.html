@@ -160,8 +160,8 @@
                 <div class="form-group checkbox">
                     <label>
                         <input type="checkbox" id="terms" name="terms" required>
-                        I agree to the <a href="../pages/terms.html">Terms of Service</a> and <a
-                            href="/pages/privacy.html">Privacy Policy</a>
+                        I agree to the <a href="/terms.html">Terms of Service</a> and <a
+                            href="/privacy.html">Privacy Policy</a>
                     </label>
                     <div class="error-message" data-for="terms"></div>
                 </div>
@@ -523,7 +523,7 @@
 
                 if (!app.checkAuth()) {
                     console.warn('Auth check failed after registration, forcing reload.');
-                    window.location.href = '/pages/free-trial.html';
+                    window.location.href = '/free-trial.html';
                     return;
                 }
 
@@ -536,7 +536,7 @@
                 sessionStorage.removeItem('signupData');
 
                 // ===== HANDLE DEEP LINK REDIRECT =====
-                let finalTarget = redirectTarget || '/pages/free-trial.html';
+                let finalTarget = redirectTarget || '/free-trial.html';
                 // Update success message
                 const successMsg = document.getElementById('successMessage');
                 if (redirectTarget) {

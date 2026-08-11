@@ -4,10 +4,10 @@ import * as utils from './utils.js';
 import * as db from './db.js';
 import { convexHttpClient } from './convex-client.js';
 import * as subscription from './subscription.js';
-import { getToken } from './auth.js';
+import { getToken, refreshSession } from './auth.js';  // ✅ ADDED refreshSession
 import * as sync from './sync.js';
 import * as notifications from './notifications.js';
-import * as referral from './referral.js';  // ADDED: referral detection
+import * as referral from './referral.js';
 
 // ==================== GLOBAL STATE ====================
 
@@ -164,12 +164,34 @@ export async function initializeApp() {
 
         console.log('[App] Final loaded user:', currentUser ? currentUser._id : 'none');
 
+        // ================================================================
+        // 🔄 SILENT TOKEN REFRESH ON STARTUP (if online and token exists)
+        // ================================================================
+        let validToken = false;
         if (token && navigator.onLine) {
-            console.log('[App] Online with token – syncing fresh data');
+            console.log('[App] Online with token – attempting silent refresh...');
+            try {
+                const refreshed = await refreshSession();
+                if (refreshed) {
+                    validToken = true;
+                    console.log('[App] Token refreshed successfully');
+                } else {
+                    console.warn('[App] Could not refresh session – using cached data');
+                }
+            } catch (err) {
+                console.warn('[App] Session refresh error:', err);
+            }
+        } else {
+            console.log('[App] Offline or no token – using cached data only');
+        }
+
+        // Only sync if we have a valid token (either fresh or still valid)
+        if (validToken) {
+            console.log('[App] Syncing fresh data with valid token...');
             await syncUserData();
             await triggerFullSync();
         } else {
-            console.log('[App] Offline or no token – using cached data only');
+            console.log('[App] No valid token – using cached data only');
         }
 
         // ✅ Let notifications module handle loading and polling
