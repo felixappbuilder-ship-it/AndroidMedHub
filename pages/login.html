@@ -132,6 +132,7 @@
             font-size: 0.95rem;
         }
 
+        /* ===== FIX: Input fields with proper dark theme support ===== */
         .form-group input[type="text"],
         .form-group input[type="password"] {
             width: 100%;
@@ -144,10 +145,19 @@
             transition: border-color 0.2s, box-shadow 0.2s;
         }
 
+        .form-group input::placeholder {
+            color: var(--text-muted, #94a3b8);
+        }
+
         .form-group input:focus {
             outline: none;
             border-color: var(--accent, #2563eb);
             box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        /* ===== Dark theme overrides (using .dark-theme as applied by ui.js) ===== */
+        .dark-theme {
+            --bg-input: #1e293b;
         }
 
         .reveal-btn {
@@ -267,11 +277,6 @@
                 flex-direction: column;
                 align-items: flex-start;
             }
-        }
-
-        /* ===== dark theme overrides using common.css variables ===== */
-        [data-theme="dark"] {
-            --bg-input: #1e293b;
         }
     </style>
 
