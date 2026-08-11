@@ -8,6 +8,18 @@ import { getToken, refreshSession } from './auth.js';  // ✅ ADDED refreshSessi
 import * as sync from './sync.js';
 import * as notifications from './notifications.js';
 import * as referral from './referral.js';
+import * as timeVerifier from './timeVerifier.js';     // ✅ NEW: time tamper detection
+
+// ==================== TIMEOUT HELPER ====================
+// Added to prevent indefinite hangs when network is unavailable (0 B).
+function withTimeout(promise, ms = 8000) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Network timeout')), ms)
+        )
+    ]);
+}
 
 // ==================== GLOBAL STATE ====================
 
@@ -164,6 +176,14 @@ export async function initializeApp() {
 
         console.log('[App] Final loaded user:', currentUser ? currentUser._id : 'none');
 
+        // ✅ TIME VERIFICATION – must happen before any Date.now() usage
+        if (!timeVerifier.verifyTime()) {
+            // verifyTime already dispatched the 'time-tamper-detected' event.
+            // The global listener will handle logout and redirect.
+            // We stop initialization here.
+            return;
+        }
+
         // ================================================================
         // 🔄 SILENT TOKEN REFRESH ON STARTUP (if online and token exists)
         // ================================================================
@@ -171,7 +191,8 @@ export async function initializeApp() {
         if (token && navigator.onLine) {
             console.log('[App] Online with token – attempting silent refresh...');
             try {
-                const refreshed = await refreshSession();
+                // ✅ TIMEOUT added – prevents indefinite hang
+                const refreshed = await withTimeout(refreshSession(), 8000);
                 if (refreshed) {
                     validToken = true;
                     console.log('[App] Token refreshed successfully');
@@ -179,7 +200,8 @@ export async function initializeApp() {
                     console.warn('[App] Could not refresh session – using cached data');
                 }
             } catch (err) {
-                console.warn('[App] Session refresh error:', err);
+                console.warn('[App] Session refresh error (timeout or other):', err);
+                // validToken stays false → we continue with cached data
             }
         } else {
             console.log('[App] Offline or no token – using cached data only');
@@ -188,8 +210,14 @@ export async function initializeApp() {
         // Only sync if we have a valid token (either fresh or still valid)
         if (validToken) {
             console.log('[App] Syncing fresh data with valid token...');
-            await syncUserData();
-            await triggerFullSync();
+            try {
+                // ✅ TIMEOUT on both syncs
+                await withTimeout(syncUserData(), 8000);
+                await withTimeout(triggerFullSync(), 8000);
+            } catch (err) {
+                console.warn('[App] Data sync timed out – using cached data', err);
+                // Do NOT clear token/user – stay offline
+            }
         } else {
             console.log('[App] No valid token – using cached data only');
         }
@@ -544,6 +572,15 @@ export const events = {
 };
 
 export function cleanupApp() {}
+
+// ==================== GLOBAL LISTENER FOR TIME TAMPER ====================
+
+// Listen for time‑tamper events and log out immediately.
+window.addEventListener('time-tamper-detected', async () => {
+    console.warn('[App] Time tamper detected – logging out');
+    await clearUser();
+    window.location.href = '/pages/login.html?error=time_tamper';
+});
 
 // ==================== EXPOSE GLOBALLY ====================
 
