@@ -225,7 +225,13 @@ export async function initializeApp() {
     try {
         // 1. Check for referral code in URL
         if (!utils.getLocalStorage('accessToken')) {
-            const refCode = referral.detectReferralFromURL();
+            // FIX: Check pendingAppUrl first (for Capacitor), fallback to window URL
+            const urlToCheck = pendingAppUrl 
+                ? 'https://medhub.edgeone.app' + pendingAppUrl 
+                : undefined;
+                
+            const refCode = referral.detectReferralFromURL(urlToCheck);
+            
             if (refCode) {
                 console.log('[App] Referral code detected from URL:', refCode);
                 referral.validateReferralCode(refCode).then(result => {
@@ -373,7 +379,15 @@ async function bootstrap() {
             console.log('[App] Incoming deep-link:', destination);
 
             if (isRootDestination(destination)) {
+                // FIX: Keep the query string (e.g. ?ref=...) when redirecting from root
+                const parsed = new URL(destination, 'https://medhub.edgeone.app');
                 target = appAuthenticated ? 'subjects' : 'welcome';
+                if (parsed.search) {
+                    target += parsed.search;
+                }
+                if (parsed.hash) {
+                    target += parsed.hash;
+                }
             } else {
                 if (appAuthenticated) {
                     target = destination;
@@ -418,11 +432,10 @@ async function bootstrap() {
         }
 
         // 12. Navigate to the determined target (if not already there)
-        // The router already loaded the first page, but we may need to redirect
-        // if the initial route was not the one we wanted.
-        const currentPage = window.location.pathname;
+        // Compare full URL (path + query + hash) to avoid redundant navigation
+        const currentFullPath = window.location.pathname + window.location.search + window.location.hash;
         const cleanTarget = target.replace(/^\/+|\/+$/g, '');
-        if (!currentPage.includes(cleanTarget)) {
+        if (!currentFullPath.includes(cleanTarget)) {
             navigateTo(target);
         }
 

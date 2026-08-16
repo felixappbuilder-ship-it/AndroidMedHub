@@ -32,7 +32,7 @@ export async function init(context) {
   // Show shimmer
   const shimmer = $('#shimmer-overlay');
   const realContent = $('#real-content');
-  realContent.classList.remove('visible');
+  if (realContent) realContent.classList.remove('visible');
 
   ui.showLoading('Loading analytics...');
 
@@ -45,7 +45,8 @@ export async function init(context) {
     renderStudyPatterns(analyticsData.studyPatterns);
     renderWeakAreas(analyticsData.weakAreas);
     renderRecommendations(analyticsData.recommendations);
-    $('#streak').textContent = analyticsData.studyPatterns?.streak || 0;
+    const streakEl = $('#streak');
+    if (streakEl) streakEl.textContent = analyticsData.studyPatterns?.streak || 0;
     renderChart('score');
 
     // Render Academic Profile with real data
@@ -61,8 +62,8 @@ export async function init(context) {
     ui.showToast('Failed to load analytics', 'error');
   } finally {
     ui.hideLoading();
-    shimmer.style.display = 'none';
-    realContent.classList.add('visible');
+    if (shimmer) shimmer.style.display = 'none';
+    if (realContent) realContent.classList.add('visible');
   }
 
   // Render downloads, planner, etc.
@@ -74,35 +75,43 @@ export async function init(context) {
   // Initialize PerformanceAI
   performanceAI = new PerformanceAI({
     onPlanGenerated: (planData) => {
-      $('#ai-actions').style.display = 'flex';
+      const aiActions = $('#ai-actions');
+      if (aiActions) aiActions.style.display = 'flex';
       window._lastAIPlan = planData;
     },
     onPlanAdopted: () => {
       ui.showToast('Plan adopted successfully! All modules updated.', 'success');
       renderAllPlannerModules();
-      $('#ai-actions').style.display = 'none';
+      const aiActions = $('#ai-actions');
+      if (aiActions) aiActions.style.display = 'none';
     },
     onPlanRegenerated: (planData) => {
-      $('#ai-actions').style.display = 'flex';
+      const aiActions = $('#ai-actions');
+      if (aiActions) aiActions.style.display = 'flex';
       window._lastAIPlan = planData;
       ui.showToast('Plan regenerated!', 'info');
     },
     onPlanAmended: (planData) => {
-      $('#ai-actions').style.display = 'flex';
+      const aiActions = $('#ai-actions');
+      if (aiActions) aiActions.style.display = 'flex';
       window._lastAIPlan = planData;
       ui.showToast('Plan amended successfully!', 'success');
     },
     onPlanCancelled: () => {
-      $('#ai-actions').style.display = 'none';
-      $('#ai-result').innerHTML = 'Plan cancelled.';
+      const aiActions = $('#ai-actions');
+      if (aiActions) aiActions.style.display = 'none';
+      const aiResult = $('#ai-result');
+      if (aiResult) aiResult.innerHTML = 'Plan cancelled.';
       window._lastAIPlan = null;
       ui.showToast('Plan cancelled.', 'info');
     },
     onAmendInputShow: () => {
-      $('#amend-area').classList.add('visible');
+      const amendArea = $('#amend-area');
+      if (amendArea) amendArea.classList.add('visible');
     },
     onAmendInputHide: () => {
-      $('#amend-area').classList.remove('visible');
+      const amendArea = $('#amend-area');
+      if (amendArea) amendArea.classList.remove('visible');
     }
   });
 
@@ -131,14 +140,14 @@ function attachEventListeners(context) {
   tabs.forEach(btn => {
     btn.addEventListener('click', function() {
       const tabId = this.dataset.tab;
-      switchTab(tabId);
+      switchTab(tabId, context.root);
     });
   });
 
   // Quick links in academic overview
   context.root.querySelectorAll('.quick-link[data-tab]').forEach(el => {
     el.addEventListener('click', function() {
-      switchTab(this.dataset.tab);
+      switchTab(this.dataset.tab, context.root);
     });
   });
 
@@ -239,7 +248,12 @@ function attachEventListeners(context) {
 
   // Share modal
   const closeShareModalBtn = $('#closeShareModalBtn');
-  if (closeShareModalBtn) closeShareModalBtn.addEventListener('click', () => $('#share-modal').style.display = 'none');
+  if (closeShareModalBtn) {
+    closeShareModalBtn.addEventListener('click', () => {
+      const modal = $('#share-modal');
+      if (modal) modal.style.display = 'none';
+    });
+  }
 
   const copyShareLinkBtn = $('#copyShareLinkBtn');
   if (copyShareLinkBtn) copyShareLinkBtn.addEventListener('click', copyShareLink);
@@ -250,6 +264,12 @@ function attachEventListeners(context) {
 
   const copyProfileBtn = $('#copyProfileBtn');
   if (copyProfileBtn) copyProfileBtn.addEventListener('click', copyProfileLink);
+
+  // Share native button (moved from module top-level)
+  const shareNativeBtn = $('#shareNativeBtn');
+  if (shareNativeBtn) {
+    shareNativeBtn.addEventListener('click', shareLinkViaNative);
+  }
 
   // Avatar upload
   const avatarUpload = $('#avatar-upload');
@@ -281,12 +301,12 @@ function attachEventListeners(context) {
 }
 
 // ==================== TAB SWITCHING ====================
-function switchTab(tabId) {
-  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab-button').forEach(el => el.classList.remove('active'));
-  const tab = document.getElementById(tabId);
+function switchTab(tabId, root = document) {
+  root.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  root.querySelectorAll('.tab-button').forEach(el => el.classList.remove('active'));
+  const tab = root.getElementById(tabId);
   if (tab) tab.classList.add('active');
-  const btn = document.querySelector(`.tab-button[data-tab="${tabId}"]`);
+  const btn = root.querySelector(`.tab-button[data-tab="${tabId}"]`);
   if (btn) btn.classList.add('active');
 
   if (tabId === 'downloaded-tab') renderDownloadedExams();
@@ -297,16 +317,25 @@ function switchTab(tabId) {
 
 function renderSummary(summary) {
   if (!summary) return;
-  $('#total-exams').textContent = summary.totalExams || 0;
-  $('#total-questions').textContent = summary.totalQuestions || 0;
-  $('#avg-score').textContent = summary.averageScore ? `${summary.averageScore}%` : '—';
-  const totalHours = summary.totalStudyTime ? (summary.totalStudyTime / 60).toFixed(1) : '0';
-  $('#total-time').textContent = `${totalHours}h`;
-  $('#best-score').textContent = summary.bestScore ? `${summary.bestScore}%` : '—';
+  const el = (id) => $(id);
+  const totalExams = el('#total-exams');
+  const totalQuestions = el('#total-questions');
+  const avgScore = el('#avg-score');
+  const totalTime = el('#total-time');
+  const bestScore = el('#best-score');
+  if (totalExams) totalExams.textContent = summary.totalExams || 0;
+  if (totalQuestions) totalQuestions.textContent = summary.totalQuestions || 0;
+  if (avgScore) avgScore.textContent = summary.averageScore ? `${summary.averageScore}%` : '—';
+  if (totalTime) {
+    const totalHours = summary.totalStudyTime ? (summary.totalStudyTime / 60).toFixed(1) : '0';
+    totalTime.textContent = `${totalHours}h`;
+  }
+  if (bestScore) bestScore.textContent = summary.bestScore ? `${summary.bestScore}%` : '—';
 }
 
 function renderSubjectMastery(subjectData) {
   const container = $('#subject-mastery');
+  if (!container) return;
   if (!subjectData || subjectData.length === 0) {
     container.innerHTML = '<p class="no-data">No subject data yet. Take some exams!</p>';
     return;
@@ -330,14 +359,20 @@ function renderSubjectMastery(subjectData) {
 
 function renderStudyPatterns(patterns) {
   if (!patterns) return;
-  $('#best-day').textContent = patterns.bestDay || '—';
-  $('#best-time').textContent = patterns.bestHour !== null ? `${patterns.bestHour}:00` : '—';
-  $('#avg-session').textContent = patterns.averageSessionTime ? `${patterns.averageSessionTime} min` : '—';
-  $('#consistency').textContent = patterns.consistency ? `${patterns.consistency}%` : '—';
+  const el = (id) => $(id);
+  const bestDay = el('#best-day');
+  const bestTime = el('#best-time');
+  const avgSession = el('#avg-session');
+  const consistency = el('#consistency');
+  if (bestDay) bestDay.textContent = patterns.bestDay || '—';
+  if (bestTime) bestTime.textContent = patterns.bestHour !== null ? `${patterns.bestHour}:00` : '—';
+  if (avgSession) avgSession.textContent = patterns.averageSessionTime ? `${patterns.averageSessionTime} min` : '—';
+  if (consistency) consistency.textContent = patterns.consistency ? `${patterns.consistency}%` : '—';
 }
 
 function renderWeakAreas(weakAreas) {
   const container = $('#weak-areas-list');
+  if (!container) return;
   if (!weakAreas || weakAreas.length === 0) {
     container.innerHTML = '<p class="no-data">No weak areas identified. Keep up the great work!</p>';
     return;
@@ -352,6 +387,7 @@ function renderWeakAreas(weakAreas) {
 
 function renderRecommendations(recs) {
   const container = $('#recommendations-list');
+  if (!container) return;
   if (!recs || recs.length === 0) {
     container.innerHTML = '<p class="no-data">No recommendations at this time.</p>';
     return;
@@ -368,7 +404,9 @@ function renderRecommendations(recs) {
 function renderChart(type) {
   if (!analyticsData) return;
   if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-  const ctx = document.getElementById('main-chart').getContext('2d');
+  const chartEl = document.getElementById('main-chart');
+  if (!chartEl) return;
+  const ctx = chartEl.getContext('2d');
   let config = null;
   switch (type) {
     case 'score': config = getScoreTrendConfig(); break;
@@ -437,8 +475,8 @@ function getSubjectMasteryConfig() {
 function getAccuracyConfig() {
   const summary = analyticsData.summary || {};
   const total = summary.totalQuestions || 0;
-  const correct = summary.correct || 0;
-  const incorrect = total - correct;
+  const correct = summary.correct ?? 0; // Use nullish coalescing to default only if undefined/null
+  const incorrect = Math.max(0, total - correct);
   return {
     type: 'doughnut',
     data: { labels: ['Correct', 'Incorrect'], datasets: [{ data: [correct, incorrect],
@@ -454,7 +492,8 @@ function getTimeDistributionConfig() {
       options: { responsive: true, maintainAspectRatio: false } };
   }
   const labels = subjectData.map(s => s.subject);
-  const times = subjectData.map(s => s.exams * 10);
+  // Use available time or questions data, fallback to 10 if neither exists
+  const times = subjectData.map(s => s.time || s.questions || 10);
   const colors = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
   return {
     type: 'doughnut',
@@ -485,83 +524,86 @@ function renderAcademicProfile(data, user) {
   if (!data) return;
   const summary = data.summary || {};
   const patterns = data.studyPatterns || {};
-  const trends = data.trends || [];
-  const exams = data.exams || [];
+  const trends = Array.isArray(data.trends) ? data.trends : [];
+  const exams = Array.isArray(data.exams) ? data.exams : [];
   const factors = computeAcademicFactors(data);
 
-  // Hero Card
-  const nameEl = $('#academic-name');
-  const yearEl = $('#academic-year');
-  const rankBadge = $('#academic-rank-badge');
-  const mpreScore = $('#academic-mpre-score');
-  const rankLabel = $('#academic-rank-label');
+  // Helper to safely set text content
+  const setText = (id, value) => {
+    const el = $(id);
+    if (el) el.textContent = value;
+  };
 
-  if (user) {
-    nameEl.textContent = user.displayName || user.name || 'Student';
-    yearEl.textContent = user.year || 'Year 1';
-  } else {
-    nameEl.textContent = 'Guest';
-    yearEl.textContent = 'Year 1';
-  }
+  // Hero Card
+  const name = user ? (user.displayName || user.name || 'Student') : 'Guest';
+  const year = user ? (user.year || 'Year 1') : 'Year 1';
+  setText('#academic-name', name);
+  setText('#academic-year', year);
 
   const ratingInfo = data.rating || { rating: 100 };
   const rank = performanceRating.getRank(ratingInfo.rating);
-  rankBadge.textContent = `🏆 ${rank.label}`;
-  mpreScore.textContent = Math.round(ratingInfo.rating);
-  rankLabel.textContent = `Rank ${rank.rank} · MPREv2`;
+  setText('#academic-rank-badge', `🏆 ${rank.label}`);
+  setText('#academic-mpre-score', Math.round(ratingInfo.rating));
+  setText('#academic-rank-label', `Rank ${rank.rank} · MPREv2`);
 
   // Overview Stats
-  $('#academic-exams').textContent = summary.totalExams || 0;
-  $('#academic-questions').textContent = summary.totalQuestions || 0;
-  $('#academic-accuracy').textContent = summary.averageScore ? `${Math.round(summary.averageScore)}%` : '0%';
-  $('#academic-streak').textContent = patterns.streak || 0;
+  setText('#academic-exams', summary.totalExams || 0);
+  setText('#academic-questions', summary.totalQuestions || 0);
+  setText('#academic-accuracy', summary.averageScore ? `${Math.round(summary.averageScore)}%` : '0%');
+  setText('#academic-streak', patterns.streak || 0);
 
   // MPRE Card
-  $('#academic-mpre-score-val').textContent = Math.round(ratingInfo.rating);
+  setText('#academic-mpre-score-val', Math.round(ratingInfo.rating));
   const stars = Math.min(5, Math.floor((ratingInfo.rating - 100) / 400) + 1);
-  $('#academic-mpre-stars').textContent = '★'.repeat(Math.max(0, stars)) + '☆'.repeat(5 - Math.max(0, stars));
-  $('#academic-mpre-rank').textContent = rank.label;
+  setText('#academic-mpre-stars', '★'.repeat(Math.max(0, stars)) + '☆'.repeat(5 - Math.max(0, stars)));
+  setText('#academic-mpre-rank', rank.label);
 
   // MPRE Progress Bars
   const progressContainer = $('#mpre-progress-bars');
-  const factorKeys = ['Accuracy', 'Difficulty', 'Consistency', 'Speed', 'Improvement', 'Activity', 'Confidence', 'Stability'];
-  let progressHtml = '';
-  factorKeys.forEach(key => {
-    const val = factors[key] || 0;
-    progressHtml += `
-      <div class="progress-bar-item">
-        <div class="row"><span class="label">${key}</span><span class="value">${Math.round(val)}%</span></div>
-        <div class="track"><div class="fill" style="width:${Math.round(val)}%;"></div></div>
-      </div>
-    `;
-  });
-  progressContainer.innerHTML = progressHtml;
-
-  // MPRE Timeline
-  const timelineContainer = $('#mpre-timeline');
-  const changes = getRatingChanges(trends);
-  if (changes.length === 0) {
-    timelineContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;text-align:center;">No recent rating changes.</div>';
-  } else {
-    let timelineHtml = '';
-    changes.slice(0, 5).forEach(change => {
-      const cls = change.change >= 0 ? 'positive' : 'negative';
-      timelineHtml += `
-        <div class="timeline-item">
-          <div><strong>${change.label}</strong><br><span style="font-size:0.8rem;color:var(--text-muted);">${change.desc}</span></div>
-          <div class="change ${cls}">${change.change >= 0 ? '+' : ''}${Math.round(change.change)}</div>
+  if (progressContainer) {
+    const factorKeys = ['Accuracy', 'Difficulty', 'Consistency', 'Speed', 'Improvement', 'Activity', 'Confidence', 'Stability'];
+    let progressHtml = '';
+    factorKeys.forEach(key => {
+      const val = factors[key] || 0;
+      progressHtml += `
+        <div class="progress-bar-item">
+          <div class="row"><span class="label">${key}</span><span class="value">${Math.round(val)}%</span></div>
+          <div class="track"><div class="fill" style="width:${Math.round(val)}%;"></div></div>
         </div>
       `;
     });
-    timelineContainer.innerHTML = timelineHtml;
+    progressContainer.innerHTML = progressHtml;
+  }
+
+  // MPRE Timeline
+  const timelineContainer = $('#mpre-timeline');
+  if (timelineContainer) {
+    const changes = getRatingChanges(trends);
+    if (changes.length === 0) {
+      timelineContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;text-align:center;">No recent rating changes.</div>';
+    } else {
+      let timelineHtml = '';
+      changes.slice(0, 5).forEach(change => {
+        const cls = change.change >= 0 ? 'positive' : 'negative';
+        timelineHtml += `
+          <div class="timeline-item">
+            <div><strong>${change.label}</strong><br><span style="font-size:0.8rem;color:var(--text-muted);">${change.desc}</span></div>
+            <div class="change ${cls}">${change.change >= 0 ? '+' : ''}${Math.round(change.change)}</div>
+          </div>
+        `;
+      });
+      timelineContainer.innerHTML = timelineHtml;
+    }
   }
 
   // AI Recommendation
   const aiRecEl = $('#ai-recommendation-body');
-  if (data.aiInsights && data.aiInsights.insights) {
-    aiRecEl.textContent = data.aiInsights.insights;
-  } else {
-    aiRecEl.textContent = 'Complete more exams to get personalized AI recommendations!';
+  if (aiRecEl) {
+    if (data.aiInsights && data.aiInsights.insights) {
+      aiRecEl.textContent = data.aiInsights.insights;
+    } else {
+      aiRecEl.textContent = 'Complete more exams to get personalized AI recommendations!';
+    }
   }
 
   // Leaderboard
@@ -572,173 +614,196 @@ function renderAcademicProfile(data, user) {
   const top3 = exams.filter(e => e.scorePercentage >= 70).slice(0, 3).length;
   const challenges = exams.length;
   const winRate = challenges > 0 ? Math.round((wins / challenges) * 100) : 0;
-  $('#comp-wins').textContent = wins;
-  $('#comp-top3').textContent = top3;
-  $('#comp-challenges').textContent = challenges;
-  $('#comp-winrate').textContent = `${winRate}%`;
+  setText('#comp-wins', wins);
+  setText('#comp-top3', top3);
+  setText('#comp-challenges', challenges);
+  setText('#comp-winrate', `${winRate}%`);
 
   // Competition Timeline
   const compTimeline = $('#comp-timeline');
-  if (exams.length === 0) {
-    compTimeline.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;text-align:center;">No competition history yet.</div>';
-  } else {
-    const recent = exams.slice(-3).reverse();
-    let html = '';
-    recent.forEach(exam => {
-      const date = exam.date ? new Date(exam.date) : new Date();
-      const label = date.toLocaleDateString('en-US', { weekday: 'long' });
-      const isWin = exam.scorePercentage >= 80;
-      html += `
-        <div class="timeline-item">
-          <div><strong>${label}</strong><br><span style="font-size:0.8rem;color:var(--text-muted);">${exam.subject}</span></div>
-          <div><span style="font-weight:600;">${Math.round(exam.scorePercentage)}%</span> ${isWin ? '🏆' : ''}</div>
-        </div>
-      `;
-    });
-    compTimeline.innerHTML = html;
+  if (compTimeline) {
+    if (exams.length === 0) {
+      compTimeline.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;text-align:center;">No competition history yet.</div>';
+    } else {
+      const recent = exams.slice(-3).reverse();
+      let html = '';
+      recent.forEach(exam => {
+        const date = exam.date ? new Date(exam.date) : new Date();
+        const label = date.toLocaleDateString('en-US', { weekday: 'long' });
+        const isWin = exam.scorePercentage >= 80;
+        html += `
+          <div class="timeline-item">
+            <div><strong>${label}</strong><br><span style="font-size:0.8rem;color:var(--text-muted);">${exam.subject}</span></div>
+            <div><span style="font-weight:600;">${Math.round(exam.scorePercentage)}%</span> ${isWin ? '🏆' : ''}</div>
+          </div>
+        `;
+      });
+      compTimeline.innerHTML = html;
+    }
   }
 
   // Rank History
   const rankHistoryContainer = $('#rank-history-container');
-  const rankHistory = getRankHistory(rank);
-  rankHistoryContainer.innerHTML = rankHistory.map(r =>
-    `<span style="background:${r.isCurrent ? 'var(--accent)' : 'var(--bg-secondary)'};color:${r.isCurrent ? '#fff' : 'var(--text-primary)'};padding:0.15rem 0.5rem;border-radius:12px;">${r.label}</span>`
-  ).join('');
+  if (rankHistoryContainer) {
+    const rankHistory = getRankHistory(rank);
+    rankHistoryContainer.innerHTML = rankHistory.map(r =>
+      `<span style="background:${r.isCurrent ? 'var(--accent)' : 'var(--bg-secondary)'};color:${r.isCurrent ? '#fff' : 'var(--text-primary)'};padding:0.15rem 0.5rem;border-radius:12px;">${r.label}</span>`
+    ).join('');
+  }
 
   // Rival Spotlight
   const rivalTitle = $('#rival-title');
   const rivalSub = $('#rival-sub');
-  (async () => {
-    try {
-      const leaderboard = await analytics.getLeaderboard(50);
-      const currentRating = ratingInfo.rating;
-      let closest = null;
-      let minDiff = Infinity;
-      for (const u of leaderboard) {
-        if (u.id === user?._id) continue;
-        const diff = Math.abs(u.rating - currentRating);
-        if (diff < minDiff) {
-          minDiff = diff;
-          closest = u;
+  if (rivalTitle && rivalSub) {
+    (async () => {
+      try {
+        const leaderboard = await analytics.getLeaderboard(50);
+        const currentRating = ratingInfo.rating;
+        let closest = null;
+        let minDiff = Infinity;
+        for (const u of leaderboard) {
+          if (user && u.id === user._id) continue;
+          const diff = Math.abs(u.rating - currentRating);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closest = u;
+          }
         }
+        if (closest) {
+          rivalTitle.textContent = `Closest Rival: ${closest.name}`;
+          rivalSub.textContent = `You ${Math.round(currentRating)} · ${closest.name} ${Math.round(closest.rating)} · ${currentRating > closest.rating ? '+' : ''}${Math.round(currentRating - closest.rating)} MPRE`;
+        } else {
+          rivalTitle.textContent = 'No rival found';
+          rivalSub.textContent = 'Compete in more exams to find your rival!';
+        }
+      } catch (e) {
+        rivalTitle.textContent = 'Rival data unavailable';
+        rivalSub.textContent = '';
       }
-      if (closest) {
-        rivalTitle.textContent = `Closest Rival: ${closest.name}`;
-        rivalSub.textContent = `You ${Math.round(currentRating)} · ${closest.name} ${Math.round(closest.rating)} · ${currentRating > closest.rating ? '+' : ''}${Math.round(currentRating - closest.rating)} MPRE`;
-      } else {
-        rivalTitle.textContent = 'No rival found';
-        rivalSub.textContent = 'Compete in more exams to find your rival!';
-      }
-    } catch (e) {
-      rivalTitle.textContent = 'Rival data unavailable';
-      rivalSub.textContent = '';
-    }
-  })();
+    })();
+  }
 
   // Growth Stats
   const totalQ = summary.totalQuestions || 0;
-  $('#growth-questions-crusher').textContent = `${totalQ} / 10,000`;
-  $('#growth-questions-fill').style.width = `${Math.min(100, (totalQ / 10000) * 100)}%`;
-  const streak = patterns.streak || 0;
-  $('#growth-streak-progress').textContent = `${streak} / 30`;
-  $('#growth-streak-fill').style.width = `${Math.min(100, (streak / 30) * 100)}%`;
+  const questionsCrusher = $('#growth-questions-crusher');
+  const questionsFill = $('#growth-questions-fill');
+  if (questionsCrusher) questionsCrusher.textContent = `${totalQ} / 10,000`;
+  if (questionsFill) questionsFill.style.width = `${Math.min(100, (totalQ / 10000) * 100)}%`;
 
-  $('#growth-avg-q').textContent = patterns.averageQuestionsPerDay || 0;
-  $('#growth-best-time').textContent = patterns.bestHour !== null ? `${patterns.bestHour}:00` : '—';
-  $('#growth-longest').textContent = patterns.longestSession || 0;
-  $('#growth-avg-session').textContent = patterns.averageSessionTime || 0;
+  const streak = patterns.streak || 0;
+  const streakProgress = $('#growth-streak-progress');
+  const streakFill = $('#growth-streak-fill');
+  if (streakProgress) streakProgress.textContent = `${streak} / 30`;
+  if (streakFill) streakFill.style.width = `${Math.min(100, (streak / 30) * 100)}%`;
+
+  setText('#growth-avg-q', patterns.averageQuestionsPerDay || 0);
+  setText('#growth-best-time', patterns.bestHour !== null ? `${patterns.bestHour}:00` : '—');
+  setText('#growth-longest', patterns.longestSession || 0);
+  setText('#growth-avg-session', patterns.averageSessionTime || 0);
 
   // Heatmap
   const heatmapContainer = $('#study-heatmap');
-  const heatmapData = generateHeatmap(trends);
-  heatmapContainer.innerHTML = heatmapData.map(d =>
-    `<div class="cell ${d.active ? (d.semi ? 'semi' : 'active') : ''}"></div>`
-  ).join('');
+  if (heatmapContainer) {
+    const heatmapData = generateHeatmap(trends);
+    heatmapContainer.innerHTML = heatmapData.map(d =>
+      `<div class="cell ${d.active ? (d.semi ? 'semi' : 'active') : ''}"></div>`
+    ).join('');
+  }
 
   // Learning Trends
   const questionTrendContainer = $('#questions-trend-chart');
   const hourTrendContainer = $('#hours-trend-chart');
-  if (trends.length > 0) {
-    const recentTrends = trends.slice(-5);
-    const qMax = Math.max(...recentTrends.map(t => t.questions || 0), 1);
-    const hMax = Math.max(...recentTrends.map(t => t.time || 0), 1);
-    questionTrendContainer.innerHTML = recentTrends.map(t =>
-      `<div style="width:20px;height:${(t.questions / qMax) * 50 + 10}px;background:var(--accent);border-radius:2px;"></div>`
-    ).join('');
-    hourTrendContainer.innerHTML = recentTrends.map(t =>
-      `<div style="width:20px;height:${(t.time / hMax) * 50 + 10}px;background:var(--warning);border-radius:2px;"></div>`
-    ).join('');
-  } else {
-    questionTrendContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;">No data</div>';
-    hourTrendContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;">No data</div>';
+  if (questionTrendContainer && hourTrendContainer) {
+    if (trends.length > 0) {
+      const recentTrends = trends.slice(-5);
+      const qMax = Math.max(...recentTrends.map(t => t.questions || 0), 1);
+      const hMax = Math.max(...recentTrends.map(t => t.time || 0), 1);
+      questionTrendContainer.innerHTML = recentTrends.map(t =>
+        `<div style="width:20px;height:${(t.questions / qMax) * 50 + 10}px;background:var(--accent);border-radius:2px;"></div>`
+      ).join('');
+      hourTrendContainer.innerHTML = recentTrends.map(t =>
+        `<div style="width:20px;height:${(t.time / hMax) * 50 + 10}px;background:var(--warning);border-radius:2px;"></div>`
+      ).join('');
+    } else {
+      questionTrendContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;">No data</div>';
+      hourTrendContainer.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;">No data</div>';
+    }
   }
 
   // Activity Feed
   const activityFeed = $('#activity-feed');
-  if (exams.length === 0) {
-    activityFeed.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;text-align:center;">No recent activity.</div>';
-  } else {
-    const recentExams = exams.slice(-5).reverse();
-    let feedHtml = '';
-    recentExams.forEach(exam => {
-      const date = exam.date ? new Date(exam.date) : new Date();
-      const label = date.toLocaleDateString('en-US', { weekday: 'long' });
-      const change = exam.ratingChange || 0;
-      const cls = change >= 0 ? 'positive' : 'negative';
-      feedHtml += `
-        <div class="timeline-item">
-          <div><strong>${label}</strong><br><span style="font-size:0.8rem;color:var(--text-muted);">${exam.subject}</span></div>
-          <div><span style="font-weight:600;">${Math.round(exam.scorePercentage)}%</span> · <span class="change ${cls}">${change >= 0 ? '+' : ''}${Math.round(change)} MPRE</span></div>
-        </div>
-      `;
-    });
-    activityFeed.innerHTML = feedHtml;
+  if (activityFeed) {
+    if (exams.length === 0) {
+      activityFeed.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;text-align:center;">No recent activity.</div>';
+    } else {
+      const recentExams = exams.slice(-5).reverse();
+      let feedHtml = '';
+      recentExams.forEach(exam => {
+        const date = exam.date ? new Date(exam.date) : new Date();
+        const label = date.toLocaleDateString('en-US', { weekday: 'long' });
+        const change = exam.ratingChange || 0;
+        const cls = change >= 0 ? 'positive' : 'negative';
+        feedHtml += `
+          <div class="timeline-item">
+            <div><strong>${label}</strong><br><span style="font-size:0.8rem;color:var(--text-muted);">${exam.subject}</span></div>
+            <div><span style="font-weight:600;">${Math.round(exam.scorePercentage)}%</span> · <span class="change ${cls}">${change >= 0 ? '+' : ''}${Math.round(change)} MPRE</span></div>
+          </div>
+        `;
+      });
+      activityFeed.innerHTML = feedHtml;
+    }
   }
 
   // Latest Badge
-  const badgeContainer = $('#latest-badge-container');
+  const latestBadgeTitle = $('#latest-badge-title');
+  const latestBadgeSub = $('#latest-badge-sub');
+  const badgeIcon = document.querySelector('#latest-badge-container .icon');
   const achievements = data.rating?.achievements || [];
-  if (achievements.length > 0) {
-    const latest = achievements[achievements.length - 1];
-    $('#latest-badge-title').textContent = latest.name;
-    $('#latest-badge-sub').textContent = `Unlocked ${latest.date || 'recently'}`;
-    badgeContainer.querySelector('.icon').textContent = latest.icon || '🏅';
-  } else {
-    $('#latest-badge-title').textContent = 'No badges yet';
-    $('#latest-badge-sub').textContent = 'Keep studying!';
+  if (latestBadgeTitle && latestBadgeSub) {
+    if (achievements.length > 0) {
+      const latest = achievements[achievements.length - 1];
+      latestBadgeTitle.textContent = latest.name;
+      latestBadgeSub.textContent = `Unlocked ${latest.date || 'recently'}`;
+      if (badgeIcon) badgeIcon.textContent = latest.icon || '🏅';
+    } else {
+      latestBadgeTitle.textContent = 'No badges yet';
+      latestBadgeSub.textContent = 'Keep studying!';
+    }
   }
 
   // Badge Gallery
   const galleryContainer = $('#badge-gallery');
-  const allBadges = [
-    { id: 'perfect_score', icon: '⭐', unlocked: achievements.some(a => a.id === 'perfect_score') },
-    { id: 'speed_demon', icon: '⚡', unlocked: achievements.some(a => a.id === 'speed_demon') },
-    { id: 'consistent', icon: '📊', unlocked: achievements.some(a => a.id === 'consistent') },
-    { id: 'rank_proficient', icon: '📚', unlocked: achievements.some(a => a.id === 'rank_proficient') },
-    { id: 'rank_expert', icon: '🚀', unlocked: achievements.some(a => a.id === 'rank_expert') },
-    { id: 'rank_master', icon: '👑', unlocked: achievements.some(a => a.id === 'rank_master') },
-    { id: 'rank_luminary', icon: '🌟', unlocked: achievements.some(a => a.id === 'rank_luminary') },
-    { id: 'anatomy_master', icon: '🩺', unlocked: true },
-  ];
-  galleryContainer.innerHTML = allBadges.map(b =>
-    `<div class="badge-item ${b.unlocked ? 'unlocked' : 'locked'}">${b.icon}</div>`
-  ).join('');
+  if (galleryContainer) {
+    const allBadges = [
+      { id: 'perfect_score', icon: '⭐', unlocked: achievements.some(a => a.id === 'perfect_score') },
+      { id: 'speed_demon', icon: '⚡', unlocked: achievements.some(a => a.id === 'speed_demon') },
+      { id: 'consistent', icon: '📊', unlocked: achievements.some(a => a.id === 'consistent') },
+      { id: 'rank_proficient', icon: '📚', unlocked: achievements.some(a => a.id === 'rank_proficient') },
+      { id: 'rank_expert', icon: '🚀', unlocked: achievements.some(a => a.id === 'rank_expert') },
+      { id: 'rank_master', icon: '👑', unlocked: achievements.some(a => a.id === 'rank_master') },
+      { id: 'rank_luminary', icon: '🌟', unlocked: achievements.some(a => a.id === 'rank_luminary') },
+      { id: 'anatomy_master', icon: '🩺', unlocked: true },
+    ];
+    galleryContainer.innerHTML = allBadges.map(b =>
+      `<div class="badge-item ${b.unlocked ? 'unlocked' : 'locked'}">${b.icon}</div>`
+    ).join('');
+  }
 
   // Academic Summary
   const summaryBody = $('#academic-summary-body');
-  if (data.aiInsights && data.aiInsights.insights) {
-    summaryBody.innerHTML = data.aiInsights.insights;
-  } else {
-    summaryBody.textContent = 'Complete more exams to get your AI summary!';
+  if (summaryBody) {
+    if (data.aiInsights && data.aiInsights.insights) {
+      summaryBody.innerHTML = data.aiInsights.insights;
+    } else {
+      summaryBody.textContent = 'Complete more exams to get your AI summary!';
+    }
   }
 
   // Update Avatar Initials
   const initialsSpan = $('#avatar-initials');
-  if (user) {
-    const name = user.displayName || user.name || 'Student';
-    initialsSpan.textContent = name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
-  } else {
-    initialsSpan.textContent = '?';
+  if (initialsSpan) {
+    const displayName = user ? (user.displayName || user.name || 'Student') : '?';
+    initialsSpan.textContent = displayName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   }
 
   // Render Charts
@@ -748,7 +813,7 @@ function renderAcademicProfile(data, user) {
 function computeAcademicFactors(data) {
   const summary = data.summary || {};
   const patterns = data.studyPatterns || {};
-  const trends = data.trends || [];
+  const trends = Array.isArray(data.trends) ? data.trends : [];
 
   const totalExams = summary.totalExams || 1;
   const totalQuestions = summary.totalQuestions || 1;
@@ -799,18 +864,17 @@ function renderAcademicCharts(data, factors) {
 
   // Destroy all existing academic chart instances
   Object.values(academicChartInstances).forEach(chart => chart.destroy());
-  // Clear the object
   for (const key in academicChartInstances) {
     delete academicChartInstances[key];
   }
 
-  const pieCtx = document.getElementById('overview-pie-chart');
-  if (pieCtx) {
+  const pieCanvas = document.getElementById('overview-pie-chart');
+  if (pieCanvas) {
     const summary = data.summary || {};
     const total = summary.totalQuestions || 100;
-    const correct = summary.correct || 90;
+    const correct = summary.correct ?? 90;
     const incorrect = Math.max(0, total - correct);
-    academicChartInstances.overviewPie = new Chart(pieCtx, {
+    academicChartInstances.overviewPie = new Chart(pieCanvas, {
       type: 'doughnut',
       data: {
         labels: ['Correct', 'Incorrect'],
@@ -820,9 +884,9 @@ function renderAcademicCharts(data, factors) {
     });
   }
 
-  const radarCtx = document.getElementById('mpre-radar-chart');
-  if (radarCtx) {
-    academicChartInstances.mpreRadar = new Chart(radarCtx, {
+  const radarCanvas = document.getElementById('mpre-radar-chart');
+  if (radarCanvas) {
+    academicChartInstances.mpreRadar = new Chart(radarCanvas, {
       type: 'radar',
       data: {
         labels: Object.keys(factors),
@@ -838,14 +902,14 @@ function renderAcademicCharts(data, factors) {
     });
   }
 
-  const doughnutCtx = document.getElementById('mpre-doughnut-chart');
-  if (doughnutCtx) {
+  const doughnutCanvas = document.getElementById('mpre-doughnut-chart');
+  if (doughnutCanvas) {
     const labels = Object.keys(factors);
-    const data = Object.values(factors);
+    const dataValues = Object.values(factors);
     const colors = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
-    academicChartInstances.mpreDoughnut = new Chart(doughnutCtx, {
+    academicChartInstances.mpreDoughnut = new Chart(doughnutCanvas, {
       type: 'doughnut',
-      data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, data.length), borderWidth: 0 }] },
+      data: { labels, datasets: [{ data: dataValues, backgroundColor: colors.slice(0, dataValues.length), borderWidth: 0 }] },
       options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 10 } } } } }
     });
   }
@@ -879,12 +943,10 @@ function generateHeatmap(trends) {
   for (let i = 0; i < days; i++) {
     const date = new Date();
     date.setDate(date.getDate() - (days - 1 - i));
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = date.toISOString().split('T')[0]; // Kept UTC as before to avoid breaking data comparisons
     const trend = trends.find(t => t.date === dateStr);
     if (trend && trend.questions > 0) {
       cells.push({ active: true, semi: false });
-    } else if (trend) {
-      cells.push({ active: false, semi: false });
     } else {
       cells.push({ active: false, semi: false });
     }
@@ -892,24 +954,61 @@ function generateHeatmap(trends) {
   return cells;
 }
 
+async function shareLinkViaNative() {
+  const linkInput = document.getElementById('share-link');
+  if (!linkInput || !linkInput.value) {
+    ui.showToast('No link to share.', 'error');
+    return;
+  }
+  const url = linkInput.value;
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: 'MedHub Exam',
+        text: 'Check out this MedHub exam!',
+        url: url,
+      });
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        ui.showToast('Share failed.', 'error');
+      }
+    }
+  } else {
+    copyShareLink();
+  }
+}
+
 // ==================== LEADERBOARD ====================
 async function renderLeaderboard(filter = 'global') {
   const container = $('#leaderboard-body');
+  if (!container) return;
   container.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);">Loading...</td></tr>';
   try {
     const users = await analytics.getLeaderboard(20);
     const currentUser = auth.getUser();
     let html = '';
     users.forEach((u, idx) => {
-      const isMe = u.id === currentUser?._id;
-      const movement = idx === 0 ? '→' : (idx < users.length - 1 ? '↓' : '↑');
-      const change = idx === 0 ? 0 : (users[idx-1].rating - u.rating);
+      const isMe = currentUser && u.id === currentUser._id;
+      // Movement: up if current rating higher than previous, down if lower, neutral if same
+      let movementClass = '';
+      let movementArrow = '→';
+      let change = 0;
+      if (idx > 0) {
+        change = u.rating - users[idx - 1].rating;
+        if (change > 0) {
+          movementClass = 'up';
+          movementArrow = '↑';
+        } else if (change < 0) {
+          movementClass = 'down';
+          movementArrow = '↓';
+        }
+      }
       html += `
         <tr style="${isMe ? 'background:var(--bg-secondary);font-weight:600;' : ''}">
           <td class="rank-num">${idx + 1}</td>
           <td class="name">${u.name} ${isMe ? '(You)' : ''}</td>
           <td class="score">${Math.round(u.rating)}</td>
-          <td class="movement ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${change > 0 ? '↑' : change < 0 ? '↓' : '→'}${Math.abs(change)}</td>
+          <td class="movement ${movementClass}">${movementArrow}${Math.abs(change)}</td>
         </tr>
       `;
     });
@@ -934,53 +1033,91 @@ function shareAcademicProfile() {
 
 function copyProfileLink() {
   const url = window.location.href;
-  navigator.clipboard.writeText(url).then(() => {
-    ui.showToast('Profile link copied to clipboard!', 'success');
-  }).catch(() => {
-    const textarea = document.createElement('textarea');
-    textarea.value = url;
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
-    ui.showToast('Profile link copied!', 'success');
-  });
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => {
+      ui.showToast('Profile link copied to clipboard!', 'success');
+    }).catch(() => {
+      fallbackCopy(url);
+    });
+  } else {
+    fallbackCopy(url);
+  }
 }
 
 function copyShareLink() {
-  const link = $('#share-link');
-  link.select();
-  document.execCommand('copy');
-  ui.showToast('Link copied to clipboard!', 'success');
+  const linkInput = document.getElementById('share-link');
+  if (!linkInput) {
+    ui.showToast('Share link not found.', 'error');
+    return;
+  }
+  const url = linkInput.value;
+  if (!url) {
+    ui.showToast('No link to copy.', 'error');
+    return;
+  }
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url)
+      .then(() => ui.showToast('Link copied to clipboard!', 'success'))
+      .catch(() => fallbackCopy(url));
+  } else {
+    fallbackCopy(url);
+  }
+}
+
+function fallbackCopy(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    const success = document.execCommand('copy');
+    if (success) {
+      ui.showToast('Link copied to clipboard!', 'success');
+    } else {
+      ui.showToast('Failed to copy link. Please copy manually.', 'error');
+    }
+  } catch (e) {
+    ui.showToast('Failed to copy link. Please copy manually.', 'error');
+  }
+  document.body.removeChild(textarea);
 }
 
 // ==================== AVATAR ====================
 function updateAvatar(dataUrl) {
   const img = $('#avatar-img');
   const initials = $('#avatar-initials');
-  if (dataUrl) {
-    img.src = dataUrl;
-    img.style.display = 'block';
-    initials.style.display = 'none';
-  } else {
-    img.style.display = 'none';
-    initials.style.display = 'flex';
+  if (img && initials) {
+    if (dataUrl) {
+      img.src = dataUrl;
+      img.style.display = 'block';
+      initials.style.display = 'none';
+    } else {
+      img.style.display = 'none';
+      initials.style.display = 'flex';
+    }
   }
 }
 
 // ==================== DOWNLOADED EXAMS ====================
 async function renderDownloadedExams() {
-  const exams = await db.getDownloadedExams();
   const container = $('#downloaded-list');
+  if (!container) return;
+  const exams = await db.getDownloadedExams();
   if (!exams || exams.length === 0) {
     container.innerHTML = '<p class="no-data">No downloaded exams yet. Download exams from results page.</p>';
     return;
   }
   let html = '';
   exams.forEach(exam => {
+    const score = exam.score != null ? Math.round(exam.score) : 0;
+    const date = exam.date ? utils.formatDate(exam.date) : '';
     html += `
       <div class="downloaded-item" data-examid="${exam.examId}">
-        <div class="downloaded-header"><span class="subject">${exam.subject}</span> <span class="score">${Math.round(exam.score)}%</span> <span class="date">${utils.formatDate(exam.date)}</span></div>
+        <div class="downloaded-header"><span class="subject">${exam.subject}</span> <span class="score">${score}%</span> <span class="date">${date}</span></div>
         <div class="downloaded-actions">
           <button class="btn-small review-btn" data-examid="${exam.examId}">Review</button>
           <button class="btn-small btn-secondary share-btn" data-examid="${exam.examId}">Share</button>
@@ -991,7 +1128,6 @@ async function renderDownloadedExams() {
   });
   container.innerHTML = html;
 
-  // Attach event listeners for download actions
   container.querySelectorAll('.review-btn').forEach(btn => {
     btn.addEventListener('click', () => reviewDownloadedExam(btn.dataset.examid));
   });
@@ -1007,6 +1143,12 @@ async function reviewDownloadedExam(examId) {
   const exams = await db.getDownloadedExams();
   const exam = exams.find(e => e.examId === examId);
   if (!exam) return;
+
+  // Guard against missing question data
+  const questions = exam.data && Array.isArray(exam.data.questions) ? exam.data.questions : [];
+  const totalQuestions = exam.data && exam.data.totalQuestions != null ? exam.data.totalQuestions : questions.length;
+  const correctAnswers = exam.data && exam.data.correctAnswers != null ? exam.data.correctAnswers : 0;
+
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
@@ -1015,27 +1157,35 @@ async function reviewDownloadedExam(examId) {
       <div class="modal-body">
         <div class="summary-card" style="display:flex; gap:1rem; margin-bottom:1rem;">
           <div class="score-circle" style="width:80px; height:80px; border-radius:50%; background:conic-gradient(var(--accent) ${exam.score}deg, #eee 0deg); display:flex; align-items:center; justify-content:center; font-weight:bold;">${Math.round(exam.score)}%</div>
-          <div><p>Date: ${utils.formatDate(exam.date)}</p><p>Questions: ${exam.data.totalQuestions}</p><p>Correct: ${exam.data.correctAnswers}</p></div>
+          <div><p>Date: ${utils.formatDate(exam.date)}</p><p>Questions: ${totalQuestions}</p><p>Correct: ${correctAnswers}</p></div>
         </div>
         <div id="modal-review-list" class="review-list"></div>
       </div>
     </div>
   `;
   document.body.appendChild(modal);
+
   const list = modal.querySelector('#modal-review-list');
-  list.innerHTML = exam.data.questions.map((q, idx) => {
-    const isCorrect = q.correct;
-    const userAnswerText = getOptionText(q.userAnswer, q.options);
-    const correctAnswerText = getOptionText(q.correctAnswer, q.options);
-    const explanationHtml = formatExplanation(q.explanation);
-    return `
-      <div class="review-item ${isCorrect ? 'correct' : 'incorrect'}">
-        <div><strong>Q${idx+1}:</strong> ${q.question}</div>
-        <div><small>Your answer: ${userAnswerText} | Correct: ${correctAnswerText}</small></div>
-        <div class="explanation">${explanationHtml}</div>
-      </div>
-    `;
-  }).join('');
+  if (list) {
+    if (questions.length > 0) {
+      list.innerHTML = questions.map((q, idx) => {
+        const isCorrect = q.correct;
+        const userAnswerText = getOptionText(q.userAnswer, q.options);
+        const correctAnswerText = getOptionText(q.correctAnswer, q.options);
+        const explanationHtml = formatExplanation(q.explanation);
+        return `
+          <div class="review-item ${isCorrect ? 'correct' : 'incorrect'}">
+            <div><strong>Q${idx+1}:</strong> ${q.question}</div>
+            <div><small>Your answer: ${userAnswerText} | Correct: ${correctAnswerText}</small></div>
+            <div class="explanation">${explanationHtml}</div>
+          </div>
+        `;
+      }).join('');
+    } else {
+      list.innerHTML = '<p>No question data available for this exam.</p>';
+    }
+  }
+
   modal.querySelector('.modal-close').onclick = () => modal.remove();
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
 }
@@ -1070,8 +1220,10 @@ async function shareDownloadedExam(examId) {
   ui.showLoading('Creating share link...');
   try {
     const result = await convexHttpClient.mutation("sharedExams/mutations:createShare", { examData: exam.data, userId: user._id });
-    $('#share-link').value = result.url;
-    $('#share-modal').style.display = 'flex';
+    const shareLinkInput = $('#share-link');
+    const shareModal = $('#share-modal');
+    if (shareLinkInput) shareLinkInput.value = result.url;
+    if (shareModal) shareModal.style.display = 'flex';
     ui.showToast('Share link created!', 'success');
   } catch (error) {
     console.error('Failed to create share link:', error);
@@ -1105,6 +1257,10 @@ function saveData(key, data) {
   localStorage.setItem(key, JSON.stringify(data));
 }
 
+// Note: These date functions currently return UTC date strings. They are used for
+// planner data storage. Changing them to local dates could break existing stored
+// data, so they are kept as-is. If you need timezone accuracy, consider migrating
+// existing data and then switching to local date strings.
 function getToday() {
   return new Date().toISOString().split('T')[0];
 }
@@ -1138,8 +1294,9 @@ function formatDateShort(iso) {
 }
 
 function renderTimetable() {
-  const data = loadData(LS_KEYS.timetable, {});
   const container = $('#timetable-container');
+  if (!container) return;
+  const data = loadData(LS_KEYS.timetable, {});
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
   let html = '';
   days.forEach(day => {
@@ -1158,24 +1315,27 @@ function renderTimetable() {
 }
 
 function addTimetableSlot() {
-  const day = $('#tt-day-select').value;
-  const time = $('#tt-time').value.trim();
-  const subject = $('#tt-subject').value.trim();
-  const color = $('#tt-color').value;
-  if (!time || !subject) { ui.showToast('Please fill in time and subject.', 'error'); return; }
+  const day = $('#tt-day-select')?.value;
+  const time = $('#tt-time')?.value.trim();
+  const subject = $('#tt-subject')?.value.trim();
+  const color = $('#tt-color')?.value;
+  if (!day || !time || !subject) { ui.showToast('Please fill in day, time and subject.', 'error'); return; }
   const data = loadData(LS_KEYS.timetable, {});
   if (!data[day]) data[day] = [];
   data[day].push({ time, subject, color });
   saveData(LS_KEYS.timetable, data);
   renderTimetable();
-  $('#tt-time').value = '';
-  $('#tt-subject').value = '';
+  const timeInput = $('#tt-time');
+  const subjectInput = $('#tt-subject');
+  if (timeInput) timeInput.value = '';
+  if (subjectInput) subjectInput.value = '';
   ui.showToast('Session added to timetable!', 'success');
 }
 
 function renderTopics() {
-  const data = loadData(LS_KEYS.topics, []);
   const container = $('#topic-planner-list');
+  if (!container) return;
+  const data = loadData(LS_KEYS.topics, []);
   if (data.length === 0) {
     container.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;">No topics yet. Add one above.</div>';
     return;
@@ -1214,22 +1374,25 @@ window.toggleTopicStatus = function(idx) {
 };
 
 function addTopicItem() {
-  const subject = $('#tp-subject').value.trim();
-  const topic = $('#tp-topic').value.trim();
-  const status = $('#tp-status').value;
+  const subject = $('#tp-subject')?.value.trim();
+  const topic = $('#tp-topic')?.value.trim();
+  const status = $('#tp-status')?.value;
   if (!subject || !topic) { ui.showToast('Please fill in subject and topic.', 'error'); return; }
   const data = loadData(LS_KEYS.topics, []);
   data.push({ subject, topic, status });
   saveData(LS_KEYS.topics, data);
   renderTopics();
-  $('#tp-subject').value = '';
-  $('#tp-topic').value = '';
+  const subjectInput = $('#tp-subject');
+  const topicInput = $('#tp-topic');
+  if (subjectInput) subjectInput.value = '';
+  if (topicInput) topicInput.value = '';
   ui.showToast('Topic added!', 'success');
 }
 
 function renderSessions() {
-  const data = loadData(LS_KEYS.sessions, []);
   const container = $('#session-log');
+  if (!container) return;
+  const data = loadData(LS_KEYS.sessions, []);
   const today = getToday();
   const weekStart = getWeekStart();
 
@@ -1242,9 +1405,13 @@ function renderSessions() {
   });
   const avg = durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
 
-  $('#ss-today').textContent = (todayTotal / 60).toFixed(1) + 'h';
-  $('#ss-week').textContent = (weekTotal / 60).toFixed(1) + 'h';
-  $('#ss-avg').textContent = avg + 'm';
+  const el = (id) => $(id);
+  const ssToday = el('#ss-today');
+  const ssWeek = el('#ss-week');
+  const ssAvg = el('#ss-avg');
+  if (ssToday) ssToday.textContent = (todayTotal / 60).toFixed(1) + 'h';
+  if (ssWeek) ssWeek.textContent = (weekTotal / 60).toFixed(1) + 'h';
+  if (ssAvg) ssAvg.textContent = avg + 'm';
 
   if (data.length === 0) {
     container.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem;">No sessions logged yet.</div>';
@@ -1260,11 +1427,11 @@ function renderSessions() {
 }
 
 function addStudySession() {
-  const subject = $('#ss-subject').value.trim();
-  const topic = $('#ss-topic').value.trim();
-  const start = $('#ss-start').value;
-  const end = $('#ss-end').value;
-  const notes = $('#ss-notes').value.trim();
+  const subject = $('#ss-subject')?.value.trim();
+  const topic = $('#ss-topic')?.value.trim();
+  const start = $('#ss-start')?.value;
+  const end = $('#ss-end')?.value;
+  const notes = $('#ss-notes')?.value.trim();
   if (!subject || !start || !end) { ui.showToast('Please fill in subject, start and end times.', 'error'); return; }
   const startMs = new Date(start).getTime();
   const endMs = new Date(end).getTime();
@@ -1274,15 +1441,16 @@ function addStudySession() {
   data.push({ subject, topic, start, end, duration, notes, date: getToday() });
   saveData(LS_KEYS.sessions, data);
   renderSessions();
-  $('#ss-subject').value = '';
-  $('#ss-topic').value = '';
-  $('#ss-start').value = '';
-  $('#ss-end').value = '';
-  $('#ss-notes').value = '';
+  ['#ss-subject', '#ss-topic', '#ss-start', '#ss-end', '#ss-notes'].forEach(sel => {
+    const input = $(sel);
+    if (input) input.value = '';
+  });
   ui.showToast(`Session logged: ${duration} minutes!`, 'success');
 }
 
 function renderStreaks() {
+  const container = $('#streak-current');
+  if (!container) return;
   const data = loadData(LS_KEYS.streaks, { current: 0, longest: 0, lastDate: null, monthDays: [] });
   const today = getToday();
   let current = data.current || 0;
@@ -1295,7 +1463,7 @@ function renderStreaks() {
   if (studiedToday && data.lastDate !== today) {
     if (data.lastDate === getYesterday()) {
       current += 1;
-    } else if (data.lastDate !== today) {
+    } else {
       current = 1;
     }
     data.lastDate = today;
@@ -1308,27 +1476,30 @@ function renderStreaks() {
     data.monthDays = monthDays;
     saveData(LS_KEYS.streaks, data);
   } else if (!studiedToday && data.lastDate !== today && data.lastDate !== getYesterday()) {
-    if (data.lastDate !== today) {
-      current = 0;
-      data.current = 0;
-      data.lastDate = today;
-      saveData(LS_KEYS.streaks, data);
-    }
+    current = 0;
+    data.current = 0;
+    data.lastDate = today;
+    saveData(LS_KEYS.streaks, data);
   }
 
-  $('#streak-current').textContent = current;
-  $('#streak-longest').textContent = longest;
+  const el = (id) => $(id);
+  const streakCurrent = el('#streak-current');
+  const streakLongest = el('#streak-longest');
+  const streakMonth = el('#streak-month');
+  if (streakCurrent) streakCurrent.textContent = current;
+  if (streakLongest) streakLongest.textContent = longest;
 
   const monthKey = today.substring(0, 7);
   const monthDays = data.monthDays || [];
   const daysInMonth = getDaysInMonth(today);
   const count = monthDays.filter(d => d.startsWith(monthKey)).length;
-  $('#streak-month').textContent = `${count}/${daysInMonth}`;
+  if (streakMonth) streakMonth.textContent = `${count}/${daysInMonth}`;
 }
 
 function renderExams() {
-  const data = loadData(LS_KEYS.exams, []);
   const container = $('#exam-cards');
+  if (!container) return;
+  const data = loadData(LS_KEYS.exams, []);
   if (data.length === 0) {
     container.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;">No exams added yet.</div>';
     return;
@@ -1352,29 +1523,35 @@ function renderExams() {
 }
 
 function addExamCountdown() {
-  const name = $('#ec-name').value.trim();
-  const date = $('#ec-date').value;
+  const name = $('#ec-name')?.value.trim();
+  const date = $('#ec-date')?.value;
   if (!name || !date) { ui.showToast('Please fill in exam name and date.', 'error'); return; }
   const data = loadData(LS_KEYS.exams, []);
   data.push({ name, date });
   saveData(LS_KEYS.exams, data);
   renderExams();
-  $('#ec-name').value = '';
-  $('#ec-date').value = '';
+  const nameInput = $('#ec-name');
+  const dateInput = $('#ec-date');
+  if (nameInput) nameInput.value = '';
+  if (dateInput) dateInput.value = '';
   ui.showToast('Exam added!', 'success');
 }
 
 function renderChecklist() {
-  const data = loadData(LS_KEYS.checklist, []);
   const container = $('#checklist-items');
+  if (!container) return;
+  const data = loadData(LS_KEYS.checklist, []);
   const total = data.length;
   const done = data.filter(d => d.done).length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
-  $('#checklist-text').textContent = `${done} / ${total} completed`;
-  $('#checklist-ring').textContent = pct + '%';
-  $('#checklist-ring').style.background =
-    `conic-gradient(var(--accent) ${pct * 3.6}deg, var(--border) 0deg)`;
+  const checklistText = $('#checklist-text');
+  const checklistRing = $('#checklist-ring');
+  if (checklistText) checklistText.textContent = `${done} / ${total} completed`;
+  if (checklistRing) {
+    checklistRing.textContent = pct + '%';
+    checklistRing.style.background = `conic-gradient(var(--accent) ${pct * 3.6}deg, var(--border) 0deg)`;
+  }
 
   if (total === 0) {
     container.innerHTML = '<div style="color:var(--text-muted);font-size:0.9rem;">No tasks yet. Add one above.</div>';
@@ -1401,13 +1578,14 @@ window.toggleChecklist = function(idx) {
 };
 
 function addChecklistItem() {
-  const task = $('#cl-task').value.trim();
+  const task = $('#cl-task')?.value.trim();
   if (!task) { ui.showToast('Please enter a task.', 'error'); return; }
   const data = loadData(LS_KEYS.checklist, []);
   data.push({ task, done: false });
   saveData(LS_KEYS.checklist, data);
   renderChecklist();
-  $('#cl-task').value = '';
+  const taskInput = $('#cl-task');
+  if (taskInput) taskInput.value = '';
   ui.showToast('Task added!', 'success');
 }
 
@@ -1421,7 +1599,7 @@ function renderAllPlannerModules() {
 }
 
 function setupPlannerButtons() {
-  // Already handled in attachEventListeners, but we'll keep this for completeness
+  // Already handled in attachEventListeners
 }
 
 function setupAcademicButtons() {
@@ -1430,11 +1608,11 @@ function setupAcademicButtons() {
 
 // ==================== AI PLANNER ====================
 function generateAIPlan() {
-  const examDate = $('#ai-exam-date').value;
-  const subjects = $('#ai-subjects').value.trim();
-  const hours = parseFloat($('#ai-hours').value) || 4;
-  const weak = $('#ai-weak').value.trim();
-  const preferred = $('#ai-time').value.trim();
+  const examDate = $('#ai-exam-date')?.value;
+  const subjects = $('#ai-subjects')?.value.trim();
+  const hours = parseFloat($('#ai-hours')?.value) || 4;
+  const weak = $('#ai-weak')?.value.trim();
+  const preferred = $('#ai-time')?.value.trim();
 
   if (!examDate || !subjects) {
     ui.showToast('Please fill in at least exam date and subjects.', 'error');
@@ -1442,9 +1620,11 @@ function generateAIPlan() {
   }
 
   const result = performanceAI.generatePlan(examDate, subjects, hours, weak, preferred);
-  $('#ai-result').innerHTML = result.display;
+  const aiResult = $('#ai-result');
+  if (aiResult) aiResult.innerHTML = result.display;
   if (result.success) {
-    $('#ai-actions').style.display = 'flex';
+    const aiActions = $('#ai-actions');
+    if (aiActions) aiActions.style.display = 'flex';
   }
 }
 
@@ -1460,7 +1640,8 @@ function regenerateAIPlan() {
   if (window._lastAIPlan) {
     const result = performanceAI.regeneratePlan();
     if (result) {
-      $('#ai-result').innerHTML = result.display;
+      const aiResult = $('#ai-result');
+      if (aiResult) aiResult.innerHTML = result.display;
     }
   } else {
     ui.showToast('No plan to regenerate. Generate a plan first.', 'error');
@@ -1472,15 +1653,17 @@ function showAmendInput() {
 }
 
 function sendAmendment() {
-  const text = $('#amend-text').value.trim();
+  const text = $('#amend-text')?.value.trim();
   if (!text) {
     ui.showToast('Please describe your amendments.', 'error');
     return;
   }
   const result = performanceAI.amendPlan(text);
   if (result) {
-    $('#ai-result').innerHTML = result.display;
-    $('#amend-text').value = '';
+    const aiResult = $('#ai-result');
+    if (aiResult) aiResult.innerHTML = result.display;
+    const amendText = $('#amend-text');
+    if (amendText) amendText.value = '';
   }
 }
 
@@ -1494,10 +1677,8 @@ export function destroy() {
     chartInstance.destroy();
     chartInstance = null;
   }
-  // Destroy academic chart instances
   Object.values(academicChartInstances).forEach(chart => chart.destroy());
   for (const key in academicChartInstances) {
     delete academicChartInstances[key];
   }
-  // Cleanup other listeners if needed
 }

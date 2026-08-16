@@ -14,7 +14,6 @@ import * as auth from './auth.js';
 import { navigateTo as pageManagerNavigate } from './page-manager.js';
 
 // ==================== STATIC PERMISSION LISTS (optional helpers) ====================
-// These are used for convenience, but the router will allow any page name.
 const PUBLIC_PAGES = [
     'index', 'welcome', 'login', 'signup', 'forgot-password',
     'locked', 'shared-exam', 'shared-note', 'privacy', 'terms', 'agent-terms', 'error'
@@ -36,10 +35,8 @@ const DYNAMIC_ROUTES = [
 
 // ==================== PERMISSION CHECK (relaxed) ====================
 function isAllowed(targetPage, currentPage) {
-    // Allow any page if it's public
     if (PUBLIC_PAGES.includes(targetPage)) return true;
 
-    // If the page is in protected list, check auth
     if (PROTECTED_PAGES.includes(targetPage)) {
         const isLoggedIn = auth.checkAuth();
         if (!isLoggedIn) {
@@ -48,30 +45,35 @@ function isAllowed(targetPage, currentPage) {
         }
     }
 
-    // For any other page (not in lists), we allow navigation.
-    // The page-manager will check the page's own `data-auth` attribute.
-    // Flow checks are relaxed – we allow any target.
     return true;
 }
 
-// ==================== ROUTE RESOLVER ====================
+// ==================== ROUTE RESOLVER (FIXED) ====================
 function resolveRoute(path) {
-    const cleanPath = path.replace(/^\/+|\/+$/g, '');
-    let [pathPart, queryString] = cleanPath.split('?');
+    let pathPart = path;
+    let queryString = '';
     let hash = '';
-    if (queryString) {
-        const parts = queryString.split('#');
-        queryString = parts[0];
-        hash = parts[1] || '';
-    } else {
-        const hashParts = pathPart.split('#');
-        pathPart = hashParts[0];
-        hash = hashParts[1] || '';
+
+    // 1. Extract hash
+    if (pathPart.includes('#')) {
+        const parts = pathPart.split('#');
+        pathPart = parts[0];
+        hash = parts[1];
     }
+
+    // 2. Extract query string
+    if (pathPart.includes('?')) {
+        const parts = pathPart.split('?');
+        pathPart = parts[0];
+        queryString = parts[1];
+    }
+
+    // 3. Clean path (strip leading and trailing slashes safely)
+    pathPart = pathPart.replace(/^\/+|\/+$/g, '');
     const query = new URLSearchParams(queryString || '');
 
-    // Root → redirect based on auth
-    if (!pathPart || pathPart === 'index') {
+    // 4. Root → redirect based on auth
+    if (!pathPart || pathPart === 'index' || pathPart === 'index.html') {
         const isLoggedIn = auth.checkAuth();
         return {
             page: isLoggedIn ? 'subjects' : 'welcome',
@@ -81,7 +83,7 @@ function resolveRoute(path) {
         };
     }
 
-    // Dynamic route match
+    // 5. Dynamic route match
     for (const route of DYNAMIC_ROUTES) {
         const match = pathPart.match(route.pattern);
         if (match) {
@@ -94,8 +96,7 @@ function resolveRoute(path) {
         }
     }
 
-    // For any other path, treat it as a page name.
-    // No static list required – the page-manager will load it and check auth.
+    // 6. For any other path
     return { page: pathPart, params: {}, query, hash };
 }
 
@@ -132,11 +133,9 @@ export function navigateTo(target, data = {}) {
         return;
     }
 
-    // Permission check (now allows unknown pages)
     const current = getCurrentPage();
     if (!isAllowed(targetPage, current)) return;
 
-    // Store navigation data
     if (Object.keys(data).length > 0) {
         sessionStorage.setItem('navData', JSON.stringify(data));
     }
@@ -151,12 +150,10 @@ export function navigateTo(target, data = {}) {
 export function getCurrentPage() {
     const path = window.location.pathname;
     if (path === '/' || path === '/index') return 'index';
-    // Dynamic route extraction
     for (const route of DYNAMIC_ROUTES) {
         const match = path.match(route.pattern);
         if (match) return route.page;
     }
-    // Otherwise, return the first path segment (or 'index')
     const parts = path.split('/').filter(p => p);
     return parts[0] || 'index';
 }
@@ -175,15 +172,11 @@ export function goBack() {
 
 // ==================== INIT ROUTER ====================
 export function initRouter() {
-    // Popstate
-    window.addEventListener('popstate', (event) => {
-        const state = event.state;
-        if (state && state.page) {
-            navigateTo({ page: state.page, params: state.params || {} });
-        } else {
-            const resolved = resolveRoute(window.location.pathname);
-            navigateTo(resolved);
-        }
+    // Popstate – always resolve from the full URL to preserve query and hash
+    window.addEventListener('popstate', () => {
+        const fullPath = window.location.pathname + window.location.search + window.location.hash;
+        const resolved = resolveRoute(fullPath);
+        navigateTo(resolved);
     });
 
     // Intercept link clicks

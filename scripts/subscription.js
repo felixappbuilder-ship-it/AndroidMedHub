@@ -14,13 +14,13 @@
 import * as utils from './utils.js';
 import * as db from './db.js';
 import * as ui from './ui.js';
-import * as payment from './payment.js'; // for plan selection
+import * as payment from './payment.js';
 import { convexHttpClient } from './convex-client.js';
 import { getToken, logout } from './auth.js';
 import * as security from './security.js';
 import * as timeVerifier from './timeVerifier.js';
 
-// ==================== CONSTANTS (ORIGINAL UI PLANS) ====================
+// ==================== CONSTANTS ====================
 
 const PLANS = {
     trial: {
@@ -99,7 +99,6 @@ const PLANS = {
     }
 };
 
-// ==================== FREE TOPICS ====================
 const FREE_TOPICS = {
     anatomy: ['back', 'introduction-anatomy', 'cross-sectional-anatomy'],
     physiology: ['introduction-homeostasis', 'body-fluids-compartments', 'membrane-physiology'],
@@ -115,7 +114,7 @@ const FREE_TOPICS = {
 
 let subscriptionStatus = null;
 
-// ==================== HELPER: ONLINE CHECK ====================
+// ==================== HELPERS ====================
 
 function requireOnline() {
     if (!navigator.onLine) {
@@ -123,19 +122,37 @@ function requireOnline() {
     }
 }
 
-// ==================== SUBSCRIPTION MANAGEMENT FUNCTIONS ====================
+// ==================== SUBSCRIPTION MANAGEMENT ====================
 
-export function getSubscription() {
-    return subscriptionStatus;
+export async function getSubscription() {
+    if (subscriptionStatus !== null) return subscriptionStatus;
+    try {
+        const cached = await db.getSubscription();
+        if (cached) {
+            subscriptionStatus = cached;
+            return cached;
+        }
+    } catch (e) {
+        console.warn('[Subscription] Failed to load from IndexedDB, falling back to localStorage', e);
+    }
+    const local = utils.getLocalStorage('subscription', null);
+    if (local) {
+        subscriptionStatus = local;
+        return local;
+    }
+    return null;
 }
 
 export async function setSubscription(sub) {
+    if (!sub) return;
     subscriptionStatus = sub;
     try {
         await db.saveSubscription(sub);
     } catch (e) {
+        console.warn('[Subscription] IndexedDB save failed, using localStorage', e);
         utils.setLocalStorage('subscription', sub);
     }
+    utils.setLocalStorage('subscription', sub);
 }
 
 export async function clearSubscription() {
@@ -143,21 +160,29 @@ export async function clearSubscription() {
     try {
         await db.deleteSubscription();
     } catch (e) {
-        utils.removeLocalStorage('subscription');
+        console.warn('[Subscription] IndexedDB delete failed', e);
     }
+    utils.removeLocalStorage('subscription');
 }
 
 // ==================== INITIALIZATION ====================
 
 export async function initSubscription() {
+    console.log('[Subscription] Initializing...');
     const sub = await getSubscriptionStatus(false);
-    if (sub) subscriptionStatus = sub;
-    else subscriptionStatus = null;
+    if (sub) {
+        subscriptionStatus = sub;
+        console.log('[Subscription] Loaded from backend/cache:', sub);
+    } else {
+        subscriptionStatus = null;
+        console.log('[Subscription] No active subscription found.');
+    }
     return subscriptionStatus;
 }
 
 export function fallbackLoadSubscription() {
     subscriptionStatus = utils.getLocalStorage('subscription', null);
+    console.log('[Subscription] Fallback loaded from localStorage:', subscriptionStatus);
 }
 
 // ==================== SUBSCRIPTION STATUS ====================
@@ -168,13 +193,14 @@ export async function getSubscriptionStatus(forceRefresh = false) {
             const token = getToken();
             if (!token) return null;
             const result = await convexHttpClient.action("subscriptions/queries:getSubscriptionStatus", { token });
-            console.log('[Subscription] Raw backend response:', JSON.stringify(result, null, 2));
-
             if (result && result.success && result.data) {
                 const backendSub = result.data;
+                // Use safe timestamp for expiry check
+                const now = timeVerifier.getSafeTimestamp();
+                if (now === null) return null; // time tamper detected
                 const isActive = backendSub.isActive !== undefined
                     ? backendSub.isActive
-                    : (backendSub.expiryDate && backendSub.expiryDate > Date.now());
+                    : (backendSub.expiryDate && backendSub.expiryDate > now);
                 const normalizedSub = {
                     _id: backendSub._id,
                     plan: backendSub.plan,
@@ -185,21 +211,20 @@ export async function getSubscriptionStatus(forceRefresh = false) {
                     autoRenew: backendSub.autoRenew ?? false,
                     paymentMethod: backendSub.paymentMethod ?? null,
                 };
-                console.log('[Subscription] Normalized sub:', normalizedSub);
                 await setSubscription(normalizedSub);
-                // ✅ After successful backend sync, reset time verifier (trust server time)
                 timeVerifier.resetTimeVerifier();
                 return normalizedSub;
             } else if (result && !result.success) {
                 if (result.error === 'invalid_token' || result.message?.toLowerCase().includes('token')) {
+                    console.warn('[Subscription] Token invalid, logging out.');
                     await logout();
                     window.location.href = '/pages/login.html';
                     return null;
                 }
-                console.warn('Backend returned error:', result.message);
+                console.warn('[Subscription] Backend returned error:', result.message);
             }
         } catch (err) {
-            console.warn('Failed to fetch subscription from backend, falling back to cache', err);
+            console.warn('[Subscription] Failed to fetch subscription from backend, falling back to cache', err);
         }
     }
 
@@ -210,31 +235,33 @@ export async function getSubscriptionStatus(forceRefresh = false) {
     return utils.getLocalStorage('subscription', null);
 }
 
+// ==================== ACTIVE CHECKS ====================
+
 export async function hasActiveSubscription() {
-    if (!timeVerifier.verifyTime()) return false;
-    const sub = await getSubscriptionStatus();
-    if (!sub) {
-        console.log('[Subscription] No subscription object');
-        return false;
-    }
+    const now = timeVerifier.getSafeTimestamp();
+    if (now === null) return false;
+
+    const sub = await getSubscription();
+    if (!sub) return false;
     const { isActive, expiryDate } = sub;
-    console.log(`[Subscription] Checking active: isActive=${isActive}, expiry=${expiryDate}, now=${Date.now()}`);
     if (isActive !== undefined && isActive !== null) {
-        return isActive && (expiryDate ? expiryDate > Date.now() : true);
+        return isActive && (expiryDate ? expiryDate > now : true);
     }
-    return expiryDate && expiryDate > Date.now();
+    return expiryDate && expiryDate > now;
 }
 
 export async function isTrialActive() {
-    if (!timeVerifier.verifyTime()) return false;
-    const sub = await getSubscriptionStatus();
-    return sub && sub.plan === 'trial' && sub.isActive && new Date(sub.expiryDate).getTime() > Date.now();
+    const now = timeVerifier.getSafeTimestamp();
+    if (now === null) return false;
+    const sub = await getSubscription();
+    return sub && sub.plan === 'trial' && sub.isActive && (sub.expiryDate ? sub.expiryDate > now : false);
 }
 
 export async function isPaidSubscription() {
-    if (!timeVerifier.verifyTime()) return false;
-    const sub = await getSubscriptionStatus();
-    return sub && sub.plan !== 'trial' && sub.isActive && new Date(sub.expiryDate).getTime() > Date.now();
+    const now = timeVerifier.getSafeTimestamp();
+    if (now === null) return false;
+    const sub = await getSubscription();
+    return sub && sub.plan !== 'trial' && sub.isActive && (sub.expiryDate ? sub.expiryDate > now : false);
 }
 
 // ==================== TRIAL MANAGEMENT ====================
@@ -253,13 +280,13 @@ export async function checkTrialEligibility() {
             if (result.error === 'invalid_token' || result.message?.toLowerCase().includes('token')) {
                 await logout();
                 window.location.href = '/pages/login.html';
-                throw new Error('Session expired. Please login again.');
+                throw new Error('Session expired.');
             }
             throw new Error(result.message);
         }
         return result.data.eligible;
     } catch (err) {
-        console.error('Failed to check trial eligibility', err);
+        console.error('Trial eligibility check failed:', err);
         throw new Error('Could not verify trial eligibility');
     }
 }
@@ -277,7 +304,7 @@ export async function startFreeTrial({ deviceFingerprint }) {
             if (result.error === 'invalid_token' || result.message?.toLowerCase().includes('token')) {
                 await logout();
                 window.location.href = '/pages/login.html';
-                throw new Error('Session expired. Please login again.');
+                throw new Error('Session expired.');
             }
             throw new Error(result.message);
         }
@@ -293,17 +320,18 @@ export async function startFreeTrial({ deviceFingerprint }) {
         timeVerifier.resetTimeVerifier();
         return normalizedSub;
     } catch (err) {
-        console.error('Failed to start trial', err);
+        console.error('Free trial start failed:', err);
         throw new Error(err.message || 'Could not start trial');
     }
 }
 
 export async function getTrialRemaining() {
-    if (!timeVerifier.verifyTime()) return null;
-    const sub = await getSubscriptionStatus();
+    const now = timeVerifier.getSafeTimestamp();
+    if (now === null) return null;
+    const sub = await getSubscription();
     if (!sub || sub.plan !== 'trial' || !sub.isActive) return null;
-    const now = Date.now();
-    const expiry = new Date(sub.expiryDate).getTime();
+    const expiry = sub.expiryDate;
+    if (!expiry) return null;
     const remainingMs = expiry - now;
     if (remainingMs <= 0) return null;
     return utils.formatTime(Math.floor(remainingMs / 1000));
@@ -350,20 +378,20 @@ export async function purchaseSubscription(planId, phoneNumber, customAmount = n
             if (result.error === 'invalid_token' || result.message?.toLowerCase().includes('token')) {
                 await logout();
                 window.location.href = '/pages/login.html';
-                throw new Error('Session expired. Please login again.');
+                throw new Error('Session expired.');
             }
             throw new Error(result.message);
         }
         return result.data;
     } catch (err) {
-        console.error('Purchase failed', err);
+        console.error('Purchase failed:', err);
         throw new Error(err.message || 'Purchase failed');
     }
 }
 
 export async function cancelSubscription() {
     requireOnline();
-    const sub = await getSubscriptionStatus();
+    const sub = await getSubscription();
     if (!sub) throw new Error('No active subscription');
     const token = getToken();
     if (!token) throw new Error('Not authenticated');
@@ -373,19 +401,19 @@ export async function cancelSubscription() {
             if (result.error === 'invalid_token' || result.message?.toLowerCase().includes('token')) {
                 await logout();
                 window.location.href = '/pages/login.html';
-                throw new Error('Session expired. Please login again.');
+                throw new Error('Session expired.');
             }
             throw new Error(result.message);
         }
         await getSubscriptionStatus(true);
         return { success: true };
     } catch (err) {
-        console.error('Cancel failed', err);
+        console.error('Cancel failed:', err);
         throw new Error(err.message || 'Cancel failed');
     }
 }
 
-// ==================== FREE TOPICS HELPERS ====================
+// ==================== FREE TOPICS ====================
 
 export function isTopicFree(subject, topicId) {
     return FREE_TOPICS[subject]?.includes(topicId) ?? false;
@@ -414,11 +442,12 @@ export async function canExportResults() {
 // ==================== TIME CALCULATIONS ====================
 
 export async function calculateRemainingTime() {
-    if (!timeVerifier.verifyTime()) return 0;
-    const sub = await getSubscriptionStatus();
+    const now = timeVerifier.getSafeTimestamp();
+    if (now === null) return 0;
+    const sub = await getSubscription();
     if (!sub || !sub.isActive) return 0;
-    const now = Date.now();
-    const expiry = new Date(sub.expiryDate).getTime();
+    const expiry = sub.expiryDate;
+    if (!expiry) return 0;
     return Math.max(0, Math.floor((expiry - now) / 1000));
 }
 
@@ -444,13 +473,11 @@ export async function activatePlan(subscriptionData) {
     return subscriptionData;
 }
 
-// ==================== SYNC LOCAL COPY ====================
+// ==================== SYNC ====================
 
 export async function syncSubscription(forceOnline = false) {
     return getSubscriptionStatus(forceOnline);
 }
-
-// ==================== REFRESH SUBSCRIPTION ====================
 
 export async function refreshSubscription() {
     return await syncSubscription(true);
@@ -480,7 +507,6 @@ window.subscription = {
     formatRemainingTime,
     isExpiringSoon,
     syncSubscription,
-    // Extra exports for app.js compatibility
     setSubscription,
     getSubscription,
     clearSubscription,

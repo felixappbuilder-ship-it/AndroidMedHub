@@ -585,23 +585,25 @@
     </main>
   </div>
 
-  <!-- Share Modal -->
-  <div id="share-modal" class="modal-overlay" style="display:none;">
-    <div class="modal">
-      <div class="modal-header">
-        <h3>Share Exam</h3>
-        <button id="closeShareModalBtn" class="modal-close">&times;</button>
+
+<!-- Share Modal -->
+<div id="share-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Share Exam</h3>
+      <button id="closeShareModalBtn" class="modal-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p>Share this link with others. They can view the exam results without logging in.</p>
+      <div style="display:flex; gap:0.5rem; margin:1rem 0;">
+        <input type="text" id="share-link" readonly style="flex:1; padding:0.5rem;" />
+        <button id="copyShareLinkBtn" class="btn-secondary">Copy</button>
+        <button id="shareNativeBtn" class="btn-secondary">📤 Share</button>
       </div>
-      <div class="modal-body">
-        <p>Share this link with others. They can view the exam results without logging in.</p>
-        <div style="display:flex; gap:0.5rem; margin:1rem 0;">
-          <input type="text" id="share-link" readonly style="flex:1; padding:0.5rem;" />
-          <button id="copyShareLinkBtn" class="btn-secondary">Copy</button>
-        </div>
-        <p class="small">Anyone with this link can view your exam results.</p>
-      </div>
+      <p class="small">Anyone with this link can view your exam results.</p>
     </div>
   </div>
+</div>
 
   <!-- Hidden file input for avatar upload -->
   <input type="file" id="avatar-upload" accept="image/*" style="display:none;" />
