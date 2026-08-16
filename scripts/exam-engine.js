@@ -1,4 +1,4 @@
-// frontend-user/scripts/exam-engine.js
+// scripts/exam-engine.js
 
 /**
  * Core Exam Engine
@@ -17,7 +17,8 @@ import * as utils from './utils.js';
 import * as questions from './questions.js';
 import * as db from './db.js';
 import * as ui from './ui.js';
-import * as performanceRating from './performance-rating-v2.js'; // ADDED
+import * as performanceRating from './performance-rating-v2.js';
+import * as auth from './auth.js';
 
 // Internal state (not exported)
 let examState = {
@@ -510,11 +511,12 @@ export async function endExam() {
     // PERFORMANCE RATING ENGINE INTEGRATION
     // ============================================================
     try {
-        const user = app.getUser();
+        const user = auth.getUser();
         if (user && user._id) {
+            // ✅ New signature: pass exam results and user object directly
             const prResult = await performanceRating.computeFullPerformance(
-                results.examId,
-                user._id,
+                results,                         // exam data
+                user,                            // user object
                 examState.lobbyAvgPR || 0.5,
                 examState.opponentRating || 100
             );
@@ -539,7 +541,8 @@ export async function endExam() {
             user.completedExams = (user.completedExams || 0) + 1;
             user.lastExamPR = prResult.pr;
             await db.saveUser(user);
-            app.setUser(user);
+            // We don't need to call app.setUser() because we're in a core module;
+            // the auth module will handle user state updates.
         }
     } catch (err) {
         console.warn('Performance Rating computation failed:', err);
@@ -571,6 +574,47 @@ export async function endExam() {
  */
 export function getConfig() {
     return examState.config;
+}
+
+// ==================== Exam Config Management ====================
+
+/**
+ * Store exam configuration in the state and optionally in sessionStorage.
+ * @param {Object} config - exam configuration object
+ */
+export function setExamConfig(config) {
+    examState.config = config;
+    if (config) {
+        sessionStorage.setItem('examConfig', JSON.stringify(config));
+    } else {
+        sessionStorage.removeItem('examConfig');
+    }
+}
+
+/**
+ * Retrieve the current exam configuration from state, or from sessionStorage as fallback.
+ * @returns {Object|null}
+ */
+export function getExamConfig() {
+    if (examState.config) return examState.config;
+    const saved = sessionStorage.getItem('examConfig');
+    if (saved) {
+        try {
+            examState.config = JSON.parse(saved);
+            return examState.config;
+        } catch {
+            examState.config = null;
+        }
+    }
+    return null;
+}
+
+/**
+ * Clear the exam configuration from state and sessionStorage.
+ */
+export function clearExamConfig() {
+    examState.config = null;
+    sessionStorage.removeItem('examConfig');
 }
 
 // ==================== Export ====================
@@ -623,5 +667,9 @@ export const examEngine = {
     isRevisionMode,
     isChallengeMode,
     isQuestionSubmitted,
-    getRevisionFeedback
+    getRevisionFeedback,
+    // ✅ Added exam config functions
+    setExamConfig,
+    getExamConfig,
+    clearExamConfig
 };

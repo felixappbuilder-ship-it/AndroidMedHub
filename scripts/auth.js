@@ -1,4 +1,4 @@
-// frontend-user/scripts/auth.js
+// scripts/auth.js
 
 /**
  * Authentication Handler – Convex Integration
@@ -7,10 +7,13 @@
  * Includes referral code support during registration.
  */
 
-import * as app from './app.js';
 import * as ui from './ui.js';
 import * as utils from './utils.js';
 import * as security from './security.js';
+import * as db from './db.js';
+import * as sync from './sync.js';
+import * as subscription from './subscription.js';
+import * as examEngine from './exam-engine.js';
 import { convexHttpClient } from './convex-client.js';
 
 // ==================== TOKEN MANAGEMENT ====================
@@ -20,15 +23,102 @@ export function getToken() {
 }
 
 export function setToken(token) {
-    app.setAuthToken(token);
+    if (token) {
+        utils.setLocalStorage('accessToken', token);
+        // notifications polling is handled elsewhere
+    } else {
+        utils.removeLocalStorage('accessToken');
+        utils.removeLocalStorage('refreshToken');
+    }
 }
 
 export function clearToken() {
-    app.setAuthToken(null);
+    setToken(null);
 }
 
 export function isTokenValid() {
     return !!getToken();
+}
+
+// ==================== USER MANAGEMENT ====================
+
+let currentUser = null;
+
+export function getUser() {
+    return currentUser;
+}
+
+export async function setUser(user) {
+    if (!user || !user._id) {
+        console.warn('[Auth] setUser called with invalid user', user);
+        return;
+    }
+    console.log('[Auth] Setting user:', user._id);
+    currentUser = user;
+
+    try {
+        await db.saveUser(user);
+        console.log('[Auth] User saved to IndexedDB');
+    } catch (e) {
+        console.warn('[Auth] IndexedDB save failed, using localStorage', e);
+    }
+    utils.setLocalStorage('user', user);
+    console.log('[Auth] User set and saved to both storages');
+
+    // Notification polling is triggered by notifications module
+}
+
+export async function initUser() {
+    console.log('[Auth] Initializing user...');
+    let userFromDB = null;
+    try {
+        userFromDB = await db.getUser();
+        console.log('[Auth] User from IndexedDB:', userFromDB ? userFromDB._id : 'none');
+    } catch (e) {
+        console.warn('[Auth] Failed to load from IndexedDB', e);
+    }
+
+    const userFromStorage = utils.getLocalStorage('user', null);
+    if (userFromDB) {
+        currentUser = userFromDB;
+        console.log('[Auth] Loaded user from IndexedDB:', currentUser);
+    } else if (userFromStorage) {
+        currentUser = userFromStorage;
+        if (userFromStorage) {
+            try {
+                await db.saveUser(userFromStorage);
+                console.log('[Auth] Restored user from localStorage to IndexedDB');
+            } catch (e) {}
+        }
+    } else {
+        currentUser = null;
+    }
+    return currentUser;
+}
+
+export function fallbackLoadUser() {
+    currentUser = utils.getLocalStorage('user', null);
+}
+
+export async function clearUser() {
+    console.log('[Auth] Clearing user');
+    currentUser = null;
+    try {
+        await db.deleteAllUsers();
+        console.log('[Auth] User deleted from IndexedDB');
+    } catch (e) {
+        console.warn('[Auth] IndexedDB delete failed', e);
+    }
+    utils.removeLocalStorage('user');
+    clearToken();
+    // Stop notification polling is handled elsewhere
+}
+
+export function checkAuth() {
+    const token = getToken();
+    const hasUser = !!currentUser;
+    console.log('[Auth] checkAuth: token exists?', !!token, 'user exists?', hasUser);
+    return !!token && hasUser;
 }
 
 // ==================== ONLINE CHECK ====================
@@ -47,22 +137,11 @@ function getErrorMessage(error) {
     return 'An unknown error occurred';
 }
 
-// ==================== TOKEN ERROR HANDLER (async, offline‑friendly) ====================
+// ==================== TOKEN ERROR HANDLER ====================
 
-/**
- * Handle token errors:
- * - If offline: keep local user, return true (do nothing).
- * - If online: try to refresh the token silently.
- * - If refresh succeeds: return true (continue).
- * - If refresh fails: clear token and sessionId, but DO NOT clear the local user.
- *
- * @param {Error|string} error - The error object or message.
- * @returns {Promise<boolean>} - true if the error was handled (i.e., caller should stop), false otherwise.
- */
 async function handleTokenError(error) {
     const message = error?.message || error?.toString() || '';
 
-    // Check if this is actually a token-related error
     const isTokenError =
         message.includes('invalid_token') ||
         message.includes('session_expired') ||
@@ -79,38 +158,22 @@ async function handleTokenError(error) {
         return false;
     }
 
-    // ========================================================
-    // OFFLINE: Never destroy the local user just because the JWT expired.
-    // ========================================================
     if (!navigator.onLine) {
-        console.warn(
-            '[Auth] Token expired while offline. Keeping local session.'
-        );
-        return true; // handled – do not propagate error further
+        console.warn('[Auth] Token expired while offline. Keeping local session.');
+        return true;
     }
 
-    // ========================================================
-    // ONLINE: Try to silently obtain a new JWT first.
-    // ========================================================
     console.warn('[Auth] Access token invalid/expired. Attempting refresh...');
-
     const refreshed = await refreshSession();
 
     if (refreshed) {
         console.log('[Auth] Token refreshed successfully.');
-        return true; // handled – continue normally
+        return true;
     }
 
-    // ========================================================
-    // ONLY NOW consider the session genuinely invalid.
-    // ========================================================
     console.warn('[Auth] Persistent session could not be refreshed.');
-
     clearToken();
     utils.removeLocalStorage('sessionId');
-
-    // IMPORTANT: Do NOT delete the cached user here.
-    // It may still be needed for offline operation.
 
     ui.showToast(
         'Your session could not be restored. Please login again when online.',
@@ -132,10 +195,6 @@ function clearStoredReferralCode() {
 
 // ==================== SESSION REFRESH ====================
 
-/**
- * Attempt to refresh the JWT using the stored sessionId.
- * @returns {Promise<boolean>} - true if refresh succeeded, false otherwise.
- */
 export async function refreshSession() {
     if (!navigator.onLine) {
         console.log('[Auth] Offline — cannot refresh token.');
@@ -161,9 +220,7 @@ export async function refreshSession() {
         }
 
         setToken(result.data.token);
-
         console.log('[Auth] JWT silently refreshed.');
-
         return true;
     } catch (error) {
         console.warn('[Auth] Session refresh error:', error);
@@ -198,7 +255,7 @@ export async function login(identifier, password, deviceInfo) {
 
         const { token, userId, name, email, sessionId, isNewDevice } = result.data;
         setToken(token);
-        await app.setUser({ _id: userId, name, email });
+        await setUser({ _id: userId, name, email });
         security.setDeviceFingerprint(deviceInfoObj.deviceFingerprint);
 
         if (sessionId) {
@@ -209,7 +266,7 @@ export async function login(identifier, password, deviceInfo) {
             ui.showToast('New device detected. You are now logged in on this device.', 'info', 4000);
         }
 
-        await app.syncUserData();
+        await sync.syncUserData();
 
         console.log('[Auth] Login successful:', email);
         return { _id: userId, name, email };
@@ -220,22 +277,14 @@ export async function login(identifier, password, deviceInfo) {
     }
 }
 
-// ==================== REGISTER (with referral and agent support) ====================
+// ==================== REGISTER ====================
 
-/**
- * Register a new user with optional referral code and agent flag.
- * @param {Object} userData - contains name, email, phone, password, securityQuestions, deviceFingerprint, deviceInfo, referralCode, isAgent, agentVerified
- * @returns {Promise<Object>} user data
- */
 export async function register(userData) {
     console.log('[Auth] Register attempt:', userData.email);
     requireOnline();
 
     try {
-        // Get referral code from userData or localStorage
         let referralCode = userData.referralCode || getStoredReferralCode();
-
-        // Extract agent flags from userData (default false)
         const isAgent = userData.isAgent || false;
         const agentVerified = userData.agentVerified || false;
 
@@ -268,13 +317,12 @@ export async function register(userData) {
 
         const { token, userId, name, email, referralCode: userReferralCode, isAgent: userIsAgent } = result.data;
         setToken(token);
-        await app.setUser({ _id: userId, name, email, referralCode: userReferralCode, isAgent: userIsAgent });
+        await setUser({ _id: userId, name, email, referralCode: userReferralCode, isAgent: userIsAgent });
         security.setDeviceFingerprint(userData.deviceFingerprint);
 
-        // Clear stored referral code after successful registration
         clearStoredReferralCode();
 
-        await app.syncUserData();
+        await sync.syncUserData();
 
         console.log('[Auth] Registration successful:', email);
         return { _id: userId, name, email, referralCode: userReferralCode, isAgent: userIsAgent };
@@ -290,10 +338,10 @@ export async function register(userData) {
 export async function logout() {
     clearToken();
     utils.removeLocalStorage('sessionId');
-    await app.clearUser();
-    app.clearSubscription();
-    app.clearExamConfig();
-    app.clearExamState();
+    await clearUser();
+    await subscription.clearSubscription();
+    examEngine.clearExamConfig();
+    examEngine.clearExamState();
     ui.showToast('Logged out', 'info');
 }
 
@@ -353,6 +401,7 @@ export async function resetPassword(identifier, newPassword) {
         sessionStorage.removeItem('resetToken');
         ui.showToast('Password reset successfully. Please login.', 'success');
         setTimeout(() => {
+            // Use router.navigateTo? For now keep, but we can import router later
             window.location.href = '/pages/login.html';
         }, 2000);
     } catch (error) {
@@ -365,7 +414,7 @@ export async function resetPassword(identifier, newPassword) {
 
 export async function updateProfile(updates) {
     requireOnline();
-    const user = app.getUser();
+    const user = getUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -380,7 +429,7 @@ export async function updateProfile(updates) {
             }
             throw new Error(result.message);
         }
-        await app.setUser(result.data.user);
+        await setUser(result.data.user);
         return result.data.user;
     } catch (error) {
         console.error('[Auth] Update profile failed', error);
@@ -391,7 +440,7 @@ export async function updateProfile(updates) {
 
 export async function changePassword({ currentPassword, newPassword }) {
     requireOnline();
-    const user = app.getUser();
+    const user = getUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -417,7 +466,7 @@ export async function changePassword({ currentPassword, newPassword }) {
 
 export async function updatePreferences(preferences) {
     requireOnline();
-    const user = app.getUser();
+    const user = getUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -432,7 +481,7 @@ export async function updatePreferences(preferences) {
             }
             throw new Error(result.message);
         }
-        await app.setUser(result.data.user);
+        await setUser(result.data.user);
     } catch (error) {
         console.error('[Auth] Update preferences failed', error);
         if (await handleTokenError(error)) return;
@@ -442,7 +491,7 @@ export async function updatePreferences(preferences) {
 
 export async function exportData() {
     requireOnline();
-    const user = app.getUser();
+    const user = getUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -473,7 +522,7 @@ export async function exportData() {
 
 export async function deleteAccount(password) {
     requireOnline();
-    const user = app.getUser();
+    const user = getUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -501,17 +550,13 @@ export async function deleteAccount(password) {
     }
 }
 
-// ==================== SESSION MANAGEMENT (2‑hour timer removed) ====================
-
-// JWT/session lifetime is controlled by the backend.
-// Do NOT force logout from the frontend based on elapsed time.
+// ==================== SESSION MANAGEMENT ====================
 
 export function startSession() {
     console.log('[Auth] Persistent session active. No frontend auto-logout timer.');
 }
 
 export function extendSession() {
-    // Kept for backwards compatibility with existing code.
     startSession();
 }
 
@@ -581,7 +626,7 @@ window.auth = {
     login,
     register,
     logout,
-    refreshSession,                // ✅ added
+    refreshSession,
     getSecurityQuestions,
     verifySecurityAnswers,
     resetPassword,
@@ -596,5 +641,14 @@ window.auth = {
     isTokenValid,
     getDevices,
     logoutDevice,
-    logoutAllDevices
+    logoutAllDevices,
+    // Additional exports used by app.js
+    setToken,
+    clearToken,
+    getUser,
+    setUser,
+    initUser,
+    fallbackLoadUser,
+    clearUser,
+    checkAuth
 };

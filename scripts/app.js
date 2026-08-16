@@ -1,17 +1,211 @@
-// frontend-user/scripts/app.js
+// scripts/app.js
 
+// ============================================================
+// IMPORTS – Core modules
+// ============================================================
 import * as utils from './utils.js';
 import * as db from './db.js';
 import { convexHttpClient } from './convex-client.js';
 import * as subscription from './subscription.js';
-import { getToken, refreshSession } from './auth.js';  // ✅ ADDED refreshSession
+import * as auth from './auth.js';
 import * as sync from './sync.js';
 import * as notifications from './notifications.js';
 import * as referral from './referral.js';
-import * as timeVerifier from './timeVerifier.js';     // ✅ NEW: time tamper detection
+import * as timeVerifier from './timeVerifier.js';
+import * as ui from './ui.js';
+import * as security from './security.js';
+import { initRouter, navigateTo } from './router.js';
+import * as updates from './updates.js';
+import * as events from './events.js';
 
-// ==================== TIMEOUT HELPER ====================
-// Added to prevent indefinite hangs when network is unavailable (0 B).
+// ============================================================
+// CAPACITOR IMPORTS (dynamic, only when available)
+// ============================================================
+let App, ScreenOrientation;
+
+async function importCapacitor() {
+    if (typeof window.Capacitor === 'undefined') {
+        console.log('[App] Capacitor not available, skipping native modules.');
+        return;
+    }
+    try {
+        const appModule = await import('@capacitor/app');
+        App = appModule.App;
+        const screenModule = await import('@capacitor/screen-orientation');
+        ScreenOrientation = screenModule.ScreenOrientation;
+        console.log('[App] Capacitor modules loaded.');
+    } catch (e) {
+        console.warn('[App] Capacitor modules not available:', e);
+    }
+}
+
+// ============================================================
+// DEEP‑LINK & REFERRAL STATE
+// ============================================================
+let pendingAppUrl = null;
+let appInitialized = false;
+let appAuthenticated = false;
+let referralCode = null;
+let redirectTarget = null;
+let screenOrientation = null;
+
+// ============================================================
+// DEEP‑LINK HELPERS
+// ============================================================
+function normalizeMedHubUrl(url) {
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' || parsed.hostname !== 'medhub.edgeone.app') {
+            console.warn('[DeepLink] Rejected external URL:', url);
+            return null;
+        }
+        return parsed.pathname + parsed.search + parsed.hash;
+    } catch (_) {
+        console.error('[DeepLink] Invalid URL:', url);
+        return null;
+    }
+}
+
+function isRootDestination(destination) {
+    try {
+        const parsed = new URL(destination, 'https://medhub.edgeone.app');
+        return parsed.pathname === '/' || parsed.pathname === '/index.html';
+    } catch {
+        return false;
+    }
+}
+
+// ============================================================
+// CAPACITOR DEEP‑LINK CAPTURE
+// ============================================================
+async function captureLaunchUrl() {
+    if (!App) return;
+    try {
+        const result = await App.getLaunchUrl();
+        if (result?.url) {
+            console.log('[DeepLink] Launch URL:', result.url);
+            const normalized = normalizeMedHubUrl(result.url);
+            if (normalized) {
+                pendingAppUrl = normalized;
+                console.log('[DeepLink] Pending destination:', pendingAppUrl);
+            }
+        }
+    } catch (_) {
+        console.warn('[DeepLink] Could not obtain launch URL');
+    }
+}
+
+function registerAppUrlListener() {
+    if (!App) return;
+    App.addListener('appUrlOpen', ({ url }) => {
+        console.log('[DeepLink] App URL opened:', url);
+        const destination = normalizeMedHubUrl(url);
+        if (!destination) return;
+        if (appInitialized) {
+            processDestination(destination);
+        } else {
+            pendingAppUrl = destination;
+        }
+    });
+}
+
+// ============================================================
+// DESTINATION PROCESSOR
+// ============================================================
+function processDestination(destination) {
+    if (!destination) return;
+    if (isRootDestination(destination)) {
+        console.log('[DeepLink] Root destination – handled by referral logic.');
+        return;
+    }
+    console.log('[DeepLink] Processing destination:', destination);
+    if (appAuthenticated) {
+        console.log('[DeepLink] Authenticated → navigating to:', destination);
+        safeRedirect(destination);
+    } else {
+        console.log('[DeepLink] Auth required – storing for later.');
+        sessionStorage.setItem('redirectAfterLogin', destination);
+        safeRedirect('/pages/welcome.html');
+    }
+}
+
+// ============================================================
+// ORIENTATION LOCK
+// ============================================================
+async function initOrientation() {
+    if (!ScreenOrientation) return;
+    try {
+        screenOrientation = ScreenOrientation;
+        await screenOrientation.lock({ orientation: 'portrait' });
+        console.log('[App] Orientation locked');
+    } catch (_) {
+        console.warn('[App] Orientation lock not available');
+    }
+}
+
+// ============================================================
+// SAFE REDIRECT (uses SPA router)
+// ============================================================
+function safeRedirect(targetPath) {
+    if (screenOrientation) {
+        screenOrientation.unlock().catch(() => {});
+    }
+    let target = targetPath;
+    // Remove leading '/pages/' if present – router expects clean URLs
+    if (target.startsWith('/pages/')) {
+        target = target.replace('/pages/', '');
+    }
+    // If it's still a full URL (with .html), strip extension
+    if (target.endsWith('.html')) {
+        target = target.replace('.html', '');
+    }
+    // Append referral code if not already present
+    if (referralCode && !target.includes('ref=')) {
+        const sep = target.includes('?') ? '&' : '?';
+        target += sep + 'ref=' + encodeURIComponent(referralCode);
+    }
+    console.log('[App] Redirecting to:', target);
+    // Use the SPA router
+    navigateTo(target);
+}
+
+// ============================================================
+// PROGRESS BAR HELPER
+// ============================================================
+let progressFill = null;
+let loadInterval = null;
+let progressResolve = null;
+
+function getProgressFill() {
+    if (!progressFill) {
+        progressFill = document.getElementById('progressFill');
+    }
+    return progressFill;
+}
+
+function updateProgress(percent) {
+    const el = getProgressFill();
+    if (el) {
+        el.style.width = Math.min(100, Math.max(0, percent)) + '%';
+    }
+}
+
+// Create a promise that resolves when progress reaches 100%
+const progressReady = new Promise((resolve) => {
+    progressResolve = resolve;
+});
+
+function completeProgress() {
+    if (progressResolve) {
+        progressResolve();
+        progressResolve = null;
+    }
+    updateProgress(100);
+}
+
+// ============================================================
+// TIMEOUT HELPER
+// ============================================================
 function withTimeout(promise, ms = 8000) {
     return Promise.race([
         promise,
@@ -21,109 +215,19 @@ function withTimeout(promise, ms = 8000) {
     ]);
 }
 
-// ==================== GLOBAL STATE ====================
-
-let currentUser = null;
-let subscriptionStatus = null;
-let examState = null;
-let appSettings = {
-    theme: 'auto',
-    notifications: true,
-    sound: true
-};
-let selectedPlan = null;
-let currentTransaction = null;
-let examConfig = null;
-let updatePending = false;
-
-// Helper to extract error message
-function getErrorMessage(error) {
-    if (error.data?.message) return error.data.message;
-    if (error.message) return error.message;
-    return 'An unknown error occurred';
-}
-
-// ==================== ACTIVE SYNC FROM BACKEND ====================
-
-/**
- * Fetch fresh user profile from backend and update local cache.
- * @returns {Promise<boolean>} true if successful
- */
-async function syncUserProfile() {
-    const token = getToken();
-    if (!token || !navigator.onLine) return false;
-    try {
-        const result = await convexHttpClient.query("users/queries:getProfile", { token });
-        if (result && result.success && result.data && result.data.user) {
-            const freshUser = result.data.user;
-            console.log('[App] Fetched user profile from backend:', freshUser);
-            await setUser(freshUser);
-            console.log('[App] User profile synced from backend');
-            return true;
-        } else if (result && !result.success) {
-            console.warn('[App] Profile sync failed:', result.message);
-        }
-    } catch (err) {
-        console.warn('[App] Could not sync user profile', err);
-    }
-    return false;
-}
-
-/**
- * Fetch fresh subscription status from backend and update local cache.
- * @returns {Promise<boolean>} true if successful
- */
-async function syncSubscriptionStatus() {
-    const token = getToken();
-    if (!token || !navigator.onLine) return false;
-    try {
-        const freshSub = await subscription.getSubscriptionStatus(true);
-        if (freshSub) {
-            subscriptionStatus = freshSub;
-            console.log('[App] Subscription status synced:', {
-                expiry: freshSub.expiryDate,
-                isActive: freshSub.isActive,
-                plan: freshSub.plan,
-                status: freshSub.status
-            });
-            return true;
-        }
-    } catch (err) {
-        console.warn('[App] Could not sync subscription status', err);
-    }
-    return false;
-}
-
-/**
- * Sync all user data from backend (profile + subscription).
- * Call after login/register or periodically.
- */
-export async function syncUserData() {
-    console.log('[App] Syncing user data from backend...');
-    await Promise.all([syncUserProfile(), syncSubscriptionStatus()]);
-}
-
-/**
- * Perform a full sync of all data (exam results, notes, conversations, etc.)
- * using the sync module. This is the main sync function for all data types.
- */
-export async function triggerFullSync() {
-    console.log('[App] Triggering full sync...');
-    await sync.syncData();
-}
-
-// ==================== INITIALIZATION ====================
-
+// ============================================================
+// INITIALIZATION (with progress steps)
+// ============================================================
 export async function initializeApp() {
     console.log('[App] Initializing...');
+    updateProgress(5);
+
     try {
-        // 1. Check for referral code in URL (BEFORE anything else)
+        // 1. Check for referral code in URL
         if (!utils.getLocalStorage('accessToken')) {
-            // Only detect referral if not logged in (avoid self-referral issues)
             const refCode = referral.detectReferralFromURL();
             if (refCode) {
                 console.log('[App] Referral code detected from URL:', refCode);
-                // Optionally validate it (async)
                 referral.validateReferralCode(refCode).then(result => {
                     if (result.valid) {
                         console.log('[App] Referral code is valid, referrer:', result.referrerName);
@@ -134,65 +238,38 @@ export async function initializeApp() {
                 });
             }
         }
+        updateProgress(15);
 
         const token = utils.getLocalStorage('accessToken');
         console.log('[App] Token from localStorage:', token ? 'exists' : 'none');
 
-        let userFromDB = null;
-        try {
-            userFromDB = await db.getUser();
-            console.log('[App] User from IndexedDB:', userFromDB ? userFromDB._id : 'none');
-        } catch (e) {
-            console.warn('[App] Failed to load from IndexedDB', e);
+        // 2. Load user
+        await auth.initUser();
+        updateProgress(30);
+
+        // 3. Load subscription
+        await subscription.initSubscription();
+        updateProgress(45);
+
+        // 4. Load app settings
+        const savedSettings = utils.getLocalStorage('appSettings', null);
+        if (savedSettings) {
+            ui.setAppSettings(savedSettings);
         }
+        updateProgress(55);
 
-        const userFromStorage = utils.getLocalStorage('user', null);
-        if (userFromDB) {
-            currentUser = userFromDB;
-            console.log('[App] Loaded user from IndexedDB:', currentUser);
-        } else if (userFromStorage) {
-            currentUser = userFromStorage;
-            if (userFromStorage) {
-                try {
-                    await db.saveUser(userFromStorage);
-                    console.log('[App] Restored user from localStorage to IndexedDB');
-                } catch (e) {}
-            }
-        } else {
-            currentUser = null;
-        }
-
-        // If we have a token and user, start notification polling (handled by setUser)
-        if (token && currentUser) {
-            notifications.startPolling();
-        }
-
-        let subFromDB = null;
-        try {
-            subFromDB = await db.getSubscription();
-        } catch (e) {}
-        subscriptionStatus = subFromDB || utils.getLocalStorage('subscription', null);
-        appSettings = utils.getLocalStorage('appSettings', appSettings);
-
-        console.log('[App] Final loaded user:', currentUser ? currentUser._id : 'none');
-
-        // ✅ TIME VERIFICATION – must happen before any Date.now() usage
+        // 5. Time verification
         if (!timeVerifier.verifyTime()) {
-            // verifyTime already dispatched the 'time-tamper-detected' event.
-            // The global listener will handle logout and redirect.
-            // We stop initialization here.
             return;
         }
+        updateProgress(65);
 
-        // ================================================================
-        // 🔄 SILENT TOKEN REFRESH ON STARTUP (if online and token exists)
-        // ================================================================
+        // 6. Silent token refresh
         let validToken = false;
         if (token && navigator.onLine) {
             console.log('[App] Online with token – attempting silent refresh...');
             try {
-                // ✅ TIMEOUT added – prevents indefinite hang
-                const refreshed = await withTimeout(refreshSession(), 8000);
+                const refreshed = await withTimeout(auth.refreshSession(), 8000);
                 if (refreshed) {
                     validToken = true;
                     console.log('[App] Token refreshed successfully');
@@ -201,421 +278,216 @@ export async function initializeApp() {
                 }
             } catch (err) {
                 console.warn('[App] Session refresh error (timeout or other):', err);
-                // validToken stays false → we continue with cached data
             }
         } else {
             console.log('[App] Offline or no token – using cached data only');
         }
+        updateProgress(75);
 
-        // Only sync if we have a valid token (either fresh or still valid)
         if (validToken) {
             console.log('[App] Syncing fresh data with valid token...');
             try {
-                // ✅ TIMEOUT on both syncs
-                await withTimeout(syncUserData(), 8000);
-                await withTimeout(triggerFullSync(), 8000);
+                await withTimeout(sync.syncUserData(), 8000);
+                await withTimeout(sync.triggerFullSync(), 8000);
             } catch (err) {
                 console.warn('[App] Data sync timed out – using cached data', err);
-                // Do NOT clear token/user – stay offline
             }
         } else {
             console.log('[App] No valid token – using cached data only');
         }
+        updateProgress(85);
 
-        // ✅ Let notifications module handle loading and polling
         if (notifications && typeof notifications.init === 'function') {
             notifications.init();
         }
+        updateProgress(95);
 
-        console.log('[App] Loaded user:', currentUser);
+        console.log('[App] Loaded user:', auth.getUser());
     } catch (e) {
         console.warn('[App] Initialization error, using localStorage fallback', e);
-        currentUser = utils.getLocalStorage('user', null);
-        subscriptionStatus = utils.getLocalStorage('subscription', null);
+        auth.fallbackLoadUser();
+        subscription.fallbackLoadSubscription();
     }
 
-    registerUpdateListener();
+    // 7. Register service worker update listener
+    updates.registerUpdateListener();
+
+    // 8. Mark progress as complete
+    completeProgress();
 }
 
-// ==================== AUTHENTICATION ====================
-
-export function setAuthToken(token) {
-    if (token) {
-        utils.setLocalStorage('accessToken', token);
-        // Restart notification polling after login (if user exists)
-        if (navigator.onLine && currentUser) {
-            notifications.startPolling();
-        }
-    } else {
-        utils.removeLocalStorage('accessToken');
-        utils.removeLocalStorage('refreshToken');
-        // Stop notification polling on logout
-        notifications.stopPolling();
-    }
-}
-
-export function checkAuth() {
-    const token = utils.getLocalStorage('accessToken');
-    const hasUser = !!currentUser;
-    console.log('[App] checkAuth: token exists?', !!token, 'user exists?', hasUser);
-    return !!token && hasUser;
-}
-
-// ==================== USER MANAGEMENT ====================
-
-export async function setUser(user) {
-    if (!user || !user._id) {
-        console.warn('[App] setUser called with invalid user', user);
-        return;
-    }
-    console.log('[App] Setting user:', user._id);
-    console.log('[App] User data:', {
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        institution: user.institution,
-        yearOfStudy: user.yearOfStudy,
-        preferences: user.preferences,
-        role: user.role,
-        username: user.username,
-        displayName: user.displayName
-    });
-    currentUser = user;
-
-    try {
-        await db.saveUser(user);
-        console.log('[App] User saved to IndexedDB');
-    } catch (e) {
-        console.warn('[App] IndexedDB save failed, using localStorage', e);
-    }
-    utils.setLocalStorage('user', user);
-    console.log('[App] User set and saved to both storages');
-
-    // Start notification polling if online and token exists
-    if (navigator.onLine && getToken()) {
-        notifications.startPolling();
-    }
-}
-
-export function getUser() {
-    return currentUser;
-}
-
-export async function clearUser() {
-    console.log('[App] Clearing user');
-    currentUser = null;
-    try {
-        await db.deleteAllUsers();
-        console.log('[App] User deleted from IndexedDB');
-    } catch (e) {
-        console.warn('[App] IndexedDB delete failed', e);
-    }
-    utils.removeLocalStorage('user');
-    setAuthToken(null);
-    console.log('[App] User cleared');
-    notifications.stopPolling();
-}
-
-// ==================== SUBSCRIPTION MANAGEMENT ====================
-
-export async function setSubscription(subscriptionObj) {
-    subscriptionStatus = subscriptionObj;
-    try {
-        await db.saveSubscription(subscriptionObj);
-    } catch (e) {
-        utils.setLocalStorage('subscription', subscriptionObj);
-    }
-}
-
-export function getSubscription() {
-    return subscriptionStatus;
-}
-
-export function hasActiveSubscription() {
-    console.log('[App] hasActiveSubscription called. subscriptionStatus:', subscriptionStatus);
-    if (!subscriptionStatus) {
-        console.log('[App] No subscriptionStatus');
-        return false;
-    }
-    const { isActive, expiryDate } = subscriptionStatus;
-    console.log('[App] isActive:', isActive, 'expiryDate:', expiryDate, 'now:', Date.now());
-    if (isActive !== undefined && isActive !== null) {
-        if (!isActive) {
-            console.log('[App] isActive is false');
-            return false;
-        }
-        if (expiryDate && expiryDate > Date.now()) {
-            console.log('[App] Active subscription (isActive true, expiry future)');
-            return true;
-        }
-        console.log('[App] isActive true but expiry missing or expired');
-        return false;
-    }
-    if (expiryDate && expiryDate > Date.now()) {
-        console.log('[App] isActive undefined, but expiryDate in future – returning true');
-        return true;
-    }
-    console.log('[App] isActive undefined and no valid expiry – returning false');
-    return false;
-}
-
-export async function clearSubscription() {
-    subscriptionStatus = null;
-    try {
-        await db.deleteSubscription();
-    } catch (e) {
-        utils.removeLocalStorage('subscription');
-    }
-}
-
-export async function refreshSubscription() {
-    return await syncSubscriptionStatus();
-}
-
-// ==================== EXAM STATE ====================
-
-export function setExamState(state) {
-    examState = state;
-}
-
-export function getExamState() {
-    return examState;
-}
-
-export function clearExamState() {
-    examState = null;
-}
-
-// ==================== EXAM CONFIG ====================
-
-export function setExamConfig(config) {
-    examConfig = config;
-    if (config) {
-        sessionStorage.setItem('examConfig', JSON.stringify(config));
-    } else {
-        sessionStorage.removeItem('examConfig');
-    }
-}
-
-export function getExamConfig() {
-    if (!examConfig) {
-        const saved = sessionStorage.getItem('examConfig');
-        if (saved) {
-            try {
-                examConfig = JSON.parse(saved);
-            } catch {
-                examConfig = null;
-            }
-        }
-    }
-    return examConfig;
-}
-
-export function clearExamConfig() {
-    examConfig = null;
-    sessionStorage.removeItem('examConfig');
-}
-
-// ==================== APP SETTINGS ====================
-
-export function setAppSetting(key, value) {
-    appSettings[key] = value;
-    utils.setLocalStorage('appSettings', appSettings);
-}
-
-export function getAppSetting(key) {
-    return appSettings[key];
-}
-
-export function toggleTheme() {
-    const newTheme = appSettings.theme === 'dark' ? 'light' : 'dark';
-    setAppSetting('theme', newTheme);
-    return newTheme;
-}
-
-// ==================== PLAN SELECTION ====================
-
-export function setSelectedPlan(plan) {
-    selectedPlan = plan;
-    if (plan) {
-        sessionStorage.setItem('selectedPlan', JSON.stringify(plan));
-        console.log('[App] Selected plan saved:', plan.id);
-    } else {
-        sessionStorage.removeItem('selectedPlan');
-    }
-}
-
-export function getSelectedPlan() {
-    if (selectedPlan) return selectedPlan;
-    const stored = sessionStorage.getItem('selectedPlan');
-    if (stored) {
-        try {
-            selectedPlan = JSON.parse(stored);
-            return selectedPlan;
-        } catch (e) {
-            console.warn('[App] Failed to parse stored plan', e);
-        }
-    }
-    return null;
-}
-
-// ==================== TRANSACTION ====================
-
-export function setCurrentTransaction(transactionId) {
-    currentTransaction = transactionId;
-}
-
-export function getCurrentTransaction() {
-    return currentTransaction;
-}
-
-// ==================== SERVICE WORKER UPDATE HANDLING ====================
-
-function registerUpdateListener() {
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-            console.log('[App] Service worker controller changed');
-            window.location.reload();
-        });
-
-        navigator.serviceWorker.ready.then(registration => {
-            if (registration.waiting) {
-                updatePending = true;
-                showUpdatePrompt();
-            }
-        });
-
-        navigator.serviceWorker.addEventListener('message', event => {
-            if (event.data && event.data.type === 'UPDATE_FOUND') {
-                updatePending = true;
-                showUpdatePrompt();
-            }
-        });
-    }
-}
-
-function showUpdatePrompt() {
-    if (!updatePending) return;
-    const updateModal = document.createElement('div');
-    updateModal.className = 'modal-overlay';
-    updateModal.innerHTML = `
-        <div class="modal">
-            <h3>Update Available</h3>
-            <p>A new version of MedExamPro is available. Refresh to get the latest features.</p>
-            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
-                <button id="update-refresh" class="btn-primary">Refresh Now</button>
-                <button id="update-later" class="btn-secondary">Later</button>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(updateModal);
-
-    document.getElementById('update-refresh').addEventListener('click', () => {
-        updateModal.remove();
-        skipWaitingAndReload();
-    });
-    document.getElementById('update-later').addEventListener('click', () => {
-        updateModal.remove();
-    });
-}
-
-export async function skipWaitingAndReload() {
-    if ('serviceWorker' in navigator) {
-        const registration = await navigator.serviceWorker.getRegistration();
-        if (registration && registration.waiting) {
-            registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-        }
-    }
-    window.location.reload();
-}
-
-export async function checkForUpdates() {
-    if (!navigator.onLine) return;
-    if ('serviceWorker' in navigator) {
-        try {
-            const registration = await navigator.serviceWorker.getRegistration();
-            if (registration) {
-                registration.update().then(() => {
-                    if (registration.waiting) {
-                        updatePending = true;
-                        showUpdatePrompt();
-                    }
-                }).catch(err => console.warn('Update check failed', err));
-            } else {
-                console.log('No service worker registered');
-            }
-        } catch (err) {
-            console.warn('Update check error', err);
-        }
-    }
-}
-
-// ==================== EVENT BUS ====================
-
-const eventListeners = {};
-
-export const events = {
-    on(event, callback) {
-        if (!eventListeners[event]) eventListeners[event] = [];
-        eventListeners[event].push(callback);
-    },
-    emit(event, data) {
-        if (eventListeners[event]) {
-            eventListeners[event].forEach(cb => cb(data));
-        }
-    },
-    off(event, callback) {
-        if (eventListeners[event]) {
-            eventListeners[event] = eventListeners[event].filter(cb => cb !== callback);
-        }
-    }
-};
-
-export function cleanupApp() {}
-
-// ==================== GLOBAL LISTENER FOR TIME TAMPER ====================
-
-// Listen for time‑tamper events and log out immediately.
+// ============================================================
+// GLOBAL LISTENER FOR TIME TAMPER
+// ============================================================
 window.addEventListener('time-tamper-detected', async () => {
     console.warn('[App] Time tamper detected – logging out');
-    await clearUser();
-    window.location.href = '/pages/login.html?error=time_tamper';
+    await auth.clearUser();
+    navigateTo('login?error=time_tamper');
 });
 
-// ==================== EXPOSE GLOBALLY ====================
+// ============================================================
+// SPA BOOTSTRAP
+// ============================================================
+async function bootstrap() {
+    try {
+        // 1. Load Capacitor modules (if available)
+        await importCapacitor();
+
+        // 2. Capture launch URL and register listener
+        await captureLaunchUrl();
+        registerAppUrlListener();
+
+        // 3. Orientation lock
+        await initOrientation();
+
+        // 4. Detect referral from URL or storage
+        let initialReferral = null;
+        if (pendingAppUrl) {
+            const fullUrl = 'https://medhub.edgeone.app' + pendingAppUrl;
+            initialReferral = referral.detectReferralFromURL(fullUrl);
+        } else {
+            initialReferral = referral.detectReferralFromURL();
+        }
+        referralCode = initialReferral;
+        if (referralCode) {
+            const badge = document.getElementById('referralBadge');
+            const codeSpan = document.getElementById('refBadgeCode');
+            if (badge && codeSpan) {
+                badge.style.display = 'block';
+                codeSpan.textContent = referralCode;
+            }
+        }
+
+        // 5. Initialize the core application (this updates progress)
+        await initializeApp();
+
+        // 6. Set authentication state
+        appAuthenticated = auth.checkAuth();
+        appInitialized = true;
+
+        // 7. Determine redirect target
+        let target;
+
+        if (pendingAppUrl) {
+            const destination = pendingAppUrl;
+            console.log('[App] Incoming deep-link:', destination);
+
+            if (isRootDestination(destination)) {
+                target = appAuthenticated ? 'subjects' : 'welcome';
+            } else {
+                if (appAuthenticated) {
+                    target = destination;
+                } else {
+                    sessionStorage.setItem('redirectAfterLogin', destination);
+                    target = 'welcome';
+                }
+            }
+        } else {
+            target = appAuthenticated ? 'subjects' : 'welcome';
+        }
+
+        redirectTarget = target;
+        console.log('[App] Target determined:', target, '| loggedIn:', appAuthenticated);
+
+        // 8. Apply theme
+        if (ui.applyTheme) ui.applyTheme();
+
+        // 9. Start the router – this loads the first page
+        initRouter();
+
+        // 10. Wait for the first page to be rendered
+        const appRoot = document.getElementById('app-root');
+        if (appRoot && !appRoot.children.length) {
+            await new Promise((resolve) => {
+                const observer = new MutationObserver(() => {
+                    if (appRoot.children.length > 0) {
+                        observer.disconnect();
+                        resolve();
+                    }
+                });
+                observer.observe(appRoot, { childList: true });
+            });
+        }
+
+        // 11. Application is ready – remove splash
+        document.documentElement.classList.add('app-ready');
+        const splash = document.getElementById('app-bootstrap');
+        if (splash) {
+            splash.style.opacity = '0';
+            setTimeout(() => splash.remove(), 500);
+        }
+
+        // 12. Navigate to the determined target (if not already there)
+        // The router already loaded the first page, but we may need to redirect
+        // if the initial route was not the one we wanted.
+        const currentPage = window.location.pathname;
+        const cleanTarget = target.replace(/^\/+|\/+$/g, '');
+        if (!currentPage.includes(cleanTarget)) {
+            navigateTo(target);
+        }
+
+        // 13. Register service worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/service-worker.js');
+        }
+    } catch (error) {
+        console.error('[App] Bootstrap failed:', error);
+        document.documentElement.classList.add('app-ready');
+        const splash = document.getElementById('app-bootstrap');
+        if (splash) splash.remove();
+        const appRoot = document.getElementById('app-root');
+        if (appRoot) {
+            appRoot.innerHTML = `
+                <section class="page error-page" data-page="error">
+                    <h1>Application Error</h1>
+                    <p>${error.message || 'Unknown error'}</p>
+                    <button onclick="router.navigateTo('welcome')">Go to Welcome</button>
+                </section>
+            `;
+        }
+    }
+}
+
+bootstrap();
+
+// ============================================================
+// EXPOSE GLOBALLY
+// ============================================================
+import * as examEngine from './exam-engine.js';
+import * as payment from './payment.js';
 
 window.app = {
     initializeApp,
-    setAuthToken,
-    checkAuth,
-    setUser,
-    getUser,
-    clearUser,
-    setSubscription,
-    getSubscription,
-    hasActiveSubscription,
-    clearSubscription,
-    setExamState,
-    getExamState,
-    clearExamState,
-    setExamConfig,
-    getExamConfig,
-    clearExamConfig,
-    setAppSetting,
-    getAppSetting,
-    toggleTheme,
-    setSelectedPlan,
-    getSelectedPlan,
-    setCurrentTransaction,
-    getCurrentTransaction,
-    checkForUpdates,
-    skipWaitingAndReload,
-    syncUserData,
-    refreshSubscription,
-    triggerFullSync,
+    setAuthToken: auth.setAuthToken,
+    checkAuth: auth.checkAuth,
+    setUser: auth.setUser,
+    getUser: auth.getUser,
+    clearUser: auth.clearUser,
+    setSubscription: subscription.setSubscription,
+    getSubscription: subscription.getSubscription,
+    hasActiveSubscription: subscription.hasActiveSubscription,
+    clearSubscription: subscription.clearSubscription,
+    setExamState: examEngine.setExamState,
+    getExamState: examEngine.getExamState,
+    clearExamState: examEngine.clearExamState,
+    setExamConfig: examEngine.setExamConfig,
+    getExamConfig: examEngine.getExamConfig,
+    clearExamConfig: examEngine.clearExamConfig,
+    setAppSetting: ui.setAppSetting,
+    getAppSetting: ui.getAppSetting,
+    toggleTheme: ui.toggleTheme,
+    setSelectedPlan: payment.setSelectedPlan,
+    getSelectedPlan: payment.getSelectedPlan,
+    setCurrentTransaction: payment.setCurrentTransaction,
+    getCurrentTransaction: payment.getCurrentTransaction,
+    checkForUpdates: updates.checkForUpdates,
+    skipWaitingAndReload: updates.skipWaitingAndReload,
+    syncUserData: sync.syncUserData,
+    refreshSubscription: subscription.refreshSubscription,
+    triggerFullSync: sync.triggerFullSync,
     syncData: sync.syncData,
     syncExamResults: sync.syncExamResults,
     syncUserProfile: sync.syncUserProfile,
     syncSubscription: sync.syncSubscription,
-    events
+    events: events.events
 };

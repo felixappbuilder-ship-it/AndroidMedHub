@@ -1,20 +1,21 @@
-// frontend-user/scripts/notifications.js
+// scripts/notifications.js
 
 /**
  * MedHub Notification Engine – Real Data Version
  * Loads, renders, filters, searches, groups, sorts, and manages notifications.
  * Uses Convex for backend sync and IndexedDB (db.js) for local caching.
- * 
+ *
  * Throttling: notifications are fetched at most once every 3 hours.
  * The timer is stored in localStorage to persist across page reloads.
  * All backend calls use the token from localStorage; no extra auth calls are made.
  */
 
-import * as app from './app.js';
 import * as ui from './ui.js';
 import * as router from './router.js';
 import * as utils from './utils.js';
 import * as db from './db.js';
+import * as auth from './auth.js';
+import * as events from './events.js';
 import { convexHttpClient } from './convex-client.js';
 import { getToken } from './auth.js';
 
@@ -142,23 +143,19 @@ function getActionsForType(type, data) {
     return actions;
 }
 
-// ==================== ENSURE APP IS INITIALIZED ====================
+// ==================== ENSURE USER IS READY ====================
 
-async function ensureAppInitialized() {
-    if (appReady) return;
-    if (!app.getUser()) {
-        console.log('[Notifications] App not initialized, initializing...');
-        await app.initializeApp();
-    }
-    appReady = true;
+async function ensureUserReady() {
+    if (auth.getUser()) return;
+    // If user not loaded, wait a bit (app.js bootstrap will load it)
     await new Promise(resolve => setTimeout(resolve, 100));
-    console.log('[Notifications] App ready, user:', app.getUser());
+    // If still not loaded, we'll rely on the periodic check in init
 }
 
 // ==================== LOAD NOTIFICATIONS ====================
 
 export async function loadNotifications(force = false) {
-    await ensureAppInitialized();
+    await ensureUserReady();
 
     const refs = getDomRefs();
     container = refs.container;
@@ -176,7 +173,7 @@ export async function loadNotifications(force = false) {
     showLoading();
 
     try {
-        const user = app.getUser();
+        const user = auth.getUser();
         if (!user) {
             showEmpty('Please log in to view notifications');
             return;
@@ -241,7 +238,7 @@ export function startPolling() {
         pollingInterval = null;
     }
 
-    const user = app.getUser();
+    const user = auth.getUser();
     if (!user || !navigator.onLine) {
         console.log('[Notifications] Not starting polling: offline or no user');
         return;
@@ -257,7 +254,7 @@ export function startPolling() {
 
     pollingInterval = setInterval(async () => {
         try {
-            const userNow = app.getUser();
+            const userNow = auth.getUser();
             if (!userNow || !navigator.onLine) {
                 stopPolling();
                 return;
@@ -317,14 +314,14 @@ function handleNewNotifications(newNotifs) {
 
     addNotifications(newNotifs);
     updateBadge();
-    app.events.emit('new-notification', { notifications: newNotifs });
+    events.events.emit('new-notification', { notifications: newNotifs });
 }
 
 function showNotificationToast(notif) {
     if (!notif) return;
-    if (!app.getAppSetting('notifications')) return;
+    if (!ui.getAppSetting('notifications')) return;
 
-    if (app.getAppSetting('sound')) {
+    if (ui.getAppSetting('sound')) {
         try {
             const audio = new Audio('/assets/sounds/notification.mp3');
             audio.play().catch(() => {});
@@ -344,7 +341,7 @@ function showNotificationToast(notif) {
 export function addNotifications(newNotifs) {
     if (!newNotifs || newNotifs.length === 0) return;
 
-    const user = app.getUser();
+    const user = auth.getUser();
     if (!user) return;
 
     newNotifs.forEach(async (notif) => {
@@ -564,16 +561,16 @@ function handleAction(action, notif) {
     
     switch (action.action) {
         case 'openExam':
-            router.navigateTo('results.html', { examId: action.data.examId });
+            router.navigateTo('results', { examId: action.data.examId });
             break;
         case 'joinChallenge':
-            router.navigateTo('exam-settings.html', { challengeId: action.data.challengeId });
+            router.navigateTo('exam-settings', { challengeId: action.data.challengeId });
             break;
         case 'renewSubscription':
-            router.navigateTo('subscription.html');
+            router.navigateTo('subscription');
             break;
         case 'openAI':
-            router.navigateTo('ai.html');
+            router.navigateTo('ai');
             break;
         case 'shareAchievement':
             if (navigator.share) {
@@ -619,7 +616,7 @@ export async function markRead(id) {
 }
 
 export async function markAllRead() {
-    const user = app.getUser();
+    const user = auth.getUser();
     if (!user) return;
     notifications.forEach(n => n.read = true);
     try {
@@ -918,21 +915,21 @@ async function setupEventListeners() {
         }
     });
     
-    app.events.on('new-notification', (data) => {
+    // Use the new event bus
+    events.events.on('new-notification', (data) => {
         if (data && data.notifications) {
             addNotifications(data.notifications);
         }
     });
 
-    await ensureAppInitialized();
-
-    if (app.getUser()) {
+    // Wait for user to be loaded (app.js bootstrap)
+    if (auth.getUser()) {
         // Initial load respects cooldown
         loadNotifications(false);
         startPolling();
     } else {
         const checkUser = setInterval(async () => {
-            if (app.getUser()) {
+            if (auth.getUser()) {
                 clearInterval(checkUser);
                 await loadNotifications(false);
                 startPolling();

@@ -1,61 +1,53 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="application-name" content="MedHub" />
+    <meta name="description" content="MedHub — Learn. Practice. Connect. Grow. Achieve." />
     <title>MedHub</title>
+
+    <!-- Global CSS (shared by all pages) -->
+    <link rel="stylesheet" href="./css/common.css" />
+    <link rel="stylesheet" href="/libs/fontawesome/css/all.min.css" />
+
+    <!-- Manifest & preloads -->
     <link rel="manifest" href="/manifest.json" />
     <link rel="preload" href="/assets/images/splash.png" as="image" />
+    <!-- In index.html -->
+    <link rel="stylesheet" href="/libs/quill/quill.snow.css">
+    <script src="/libs/quill/quill.min.js"></script>
+    <script defer src="/libs/chart/chart.min.js"></script>
+    <script src="/libs/pdfjs/pdf.min.js"></script>
     <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/service-worker.js');
-        }
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '/libs/pdfjs/pdf.worker.min.js';
     </script>
+    <script src="/libs/pdfkit.standalone.js"></script>
+    <!-- ============================================================
+         SPLASH‑SPECIFIC CSS – only what’s needed for the overlay
+         ============================================================ -->
     <style>
-        /* ===== RESET & BASE ===== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        /* ===== Splash overlay ===== */
+#app-bootstrap {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;          /* ← center horizontally */
+    justify-content: flex-end;    /* ← keep at bottom */
+    padding-bottom: 60px;
+    background-image: url('/assets/images/splash.png');
+    background-size: 100% 100%;
+    background-position: center;
+    background-repeat: no-repeat;
+    transition: opacity 0.5s ease;
+}
 
-        html {
-            font-size: 16px !important;
-            -webkit-text-size-adjust: 100% !important;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            font-size: 1rem !important;
-            line-height: 1.5 !important;
-            background: #0a0e1a;
-            color: #ffffff;
-            height: 100vh;
-            width: 100vw;
-            overflow: hidden;
-            display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            user-select: none;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        .splash-container {
-            width: 100%;
-            height: 100%;
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: flex-end;
-            padding-bottom: 60px;
-            background-image: url('/assets/images/splash.png');
-            background-size: 100% 100%;
-            background-position: center;
-            background-repeat: no-repeat;
-        }
-
-        .splash-container::after {
+        /* Gradient at bottom */
+        #app-bootstrap::after {
             content: '';
             position: absolute;
             bottom: 0;
@@ -67,8 +59,8 @@
             z-index: 0;
         }
 
+        /* Referral badge */
         .referral-badge {
-            display: none;
             position: relative;
             z-index: 1;
             margin-bottom: 1.2rem;
@@ -82,6 +74,8 @@
             letter-spacing: 0.5px;
             animation: badgePulse 2s ease-in-out infinite;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            display: none;
+            /* shown by JS if referral exists */
         }
 
         .referral-badge span {
@@ -90,17 +84,20 @@
         }
 
         @keyframes badgePulse {
+
             0%,
             100% {
                 opacity: 0.8;
                 transform: scale(1);
             }
+
             50% {
                 opacity: 1;
                 transform: scale(1.04);
             }
         }
 
+        /* Loading section */
         .loading-section {
             position: relative;
             z-index: 1;
@@ -128,33 +125,32 @@
             }
         }
 
-        .progress-track {
-            width: 100%;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.15);
-            border-radius: 2px;
-            overflow: hidden;
-            position: relative;
+.progress-track {
+    width: 100%;
+    height: 12px;                /* thicker */
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 9999px;       /* fully rounded */
+    overflow: hidden;
+    position: relative;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+
         }
 
-        .progress-fill {
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(90deg, #2563eb, #60a5fa, #2563eb);
-            background-size: 200% 100%;
-            border-radius: 2px;
-            animation: progressShimmer 1.5s linear infinite;
-            transition: width 0.3s ease;
-        }
+ .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #2563eb, #60a5fa, #2563eb);
+    background-size: 200% 100%;
+    border-radius: 9999px;
+    animation: progressShimmer 1.5s linear infinite;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 12px rgba(96, 165, 250, 0.4); /* soft glow */
+}
 
-        @keyframes progressShimmer {
-            0% {
-                background-position: 0% 0%;
-            }
-            100% {
-                background-position: 200% 0%;
-            }
-        }
+@keyframes progressShimmer {
+    0% { background-position: 0% 0%; }
+    100% { background-position: 200% 0%; }
+}
 
         .loading-text {
             font-size: 0.85rem;
@@ -174,17 +170,20 @@
         .loading-text .dot:nth-child(2) {
             animation-delay: 0.2s;
         }
+
         .loading-text .dot:nth-child(3) {
             animation-delay: 0.4s;
         }
 
         @keyframes dotPulse {
+
             0%,
             60%,
             100% {
                 opacity: 0.3;
                 transform: translateY(0);
             }
+
             30% {
                 opacity: 1;
                 transform: translateY(-4px);
@@ -203,31 +202,27 @@
             margin-top: 0.25rem;
         }
 
-        @media (max-width: 480px) {
-            .splash-container {
-                padding-bottom: 40px;
-            }
-            .loading-section {
-                max-width: 220px;
-            }
-            .spinner {
-                width: 28px;
-                height: 28px;
-            }
+        /* SPA mount point – initially empty */
+        #app-root {
+            min-height: 100vh;
+            position: relative;
+            z-index: 1;
         }
 
-        @media (min-width: 768px) {
-            .splash-container {
-                padding-bottom: 80px;
-            }
-            .loading-section {
-                max-width: 320px;
-            }
+        /* When app is ready, hide bootstrap */
+        .app-ready #app-bootstrap {
+            opacity: 0 !important;
+            pointer-events: none;
         }
     </style>
 </head>
+
 <body>
-    <div class="splash-container" id="splashContainer">
+
+    <!-- ============================================================
+         TEMPORARY SPLASH SCREEN – removed after first page loads
+         ============================================================ -->
+    <div id="app-bootstrap" aria-live="polite" aria-label="Loading MedHub">
         <div class="referral-badge" id="referralBadge">
             🎯 Referral: <span id="refBadgeCode">—</span>
         </div>
@@ -245,386 +240,16 @@
         <div class="version-info">v1.0.0</div>
     </div>
 
-    <script type="module">
-        // ===================================================================
-        // 1. IMPORTS
-        // ===================================================================
-        import { App } from '@capacitor/app';
+    <!-- ============================================================
+         SPA APPLICATION HOST – page HTML is injected here
+         ============================================================ -->
+    <div id="app-root" data-app="medhub"></div>
 
-        // ===================================================================
-        // 2. DOM REFS
-        // ===================================================================
-        const progressFill = document.getElementById('progressFill');
-        const loadingText = document.getElementById('loadingText');
-        const spinner = document.getElementById('spinner');
-        const referralBadge = document.getElementById('referralBadge');
-        const refBadgeCode = document.getElementById('refBadgeCode');
+    <!-- ============================================================
+         SINGLE ENTRY POINT – app.js bootstraps everything
+         ============================================================ -->
+    <script type="module" src="/scripts/app.js"></script>
 
-        // ===================================================================
-        // 3. STATE
-        // ===================================================================
-        let pendingAppUrl = null;
-        let appInitialized = false;
-        let appAuthenticated = false;
-        let referralCode = null;
-        let redirectTarget = null;
-
-        // ===================================================================
-        // 4. DEEP-LINK NORMALISER
-        // ===================================================================
-        function normalizeMedHubUrl(url) {
-            try {
-                const parsed = new URL(url);
-                if (parsed.protocol !== 'https:' || parsed.hostname !== 'medhub.edgeone.app') {
-                    console.warn('[DeepLink] Rejected external URL:', url);
-                    return null;
-                }
-                return parsed.pathname + parsed.search + parsed.hash;
-            } catch (_) {
-                console.error('[DeepLink] Invalid URL:', url);
-                return null;
-            }
-        }
-
-        function isRootDestination(destination) {
-            try {
-                const parsed = new URL(destination, 'https://medhub.edgeone.app');
-                return parsed.pathname === '/' || parsed.pathname === '/index.html';
-            } catch {
-                return false;
-            }
-        }
-
-        // ===================================================================
-        // 5. REFERRAL DETECTION
-        // ===================================================================
-        function detectReferral(sourceUrl) {
-            let params;
-            if (sourceUrl) {
-                try {
-                    const parsed = new URL(sourceUrl, 'https://medhub.edgeone.app');
-                    params = parsed.searchParams;
-                } catch {
-                    params = new URLSearchParams(window.location.search);
-                }
-            } else {
-                params = new URLSearchParams(window.location.search);
-            }
-
-            let code = params.get('ref') || params.get('referral') || params.get('code');
-            if (code) {
-                code = code.trim();
-                if (code.length > 0) {
-                    localStorage.setItem('referral_code', code);
-                    console.log('[Splash] Referral from URL:', code);
-                    return code;
-                }
-            }
-            const stored = localStorage.getItem('referral_code');
-            if (stored) {
-                console.log('[Splash] Referral from storage:', stored);
-                return stored;
-            }
-            return null;
-        }
-
-        // ===================================================================
-        // 6. CAPACITOR DEEP-LINK CAPTURE
-        // ===================================================================
-        async function captureLaunchUrl() {
-            try {
-                const result = await App.getLaunchUrl();
-                if (result?.url) {
-                    console.log('[DeepLink] Launch URL:', result.url);
-                    const normalized = normalizeMedHubUrl(result.url);
-                    if (normalized) {
-                        pendingAppUrl = normalized;
-                        console.log('[DeepLink] Pending destination:', pendingAppUrl);
-                    }
-                }
-            } catch (_) {
-                console.warn('[DeepLink] Could not obtain launch URL');
-            }
-        }
-
-        function registerAppUrlListener() {
-            App.addListener('appUrlOpen', ({ url }) => {
-                console.log('[DeepLink] App URL opened:', url);
-                const destination = normalizeMedHubUrl(url);
-                if (!destination) return;
-                if (appInitialized) {
-                    processDestination(destination);
-                } else {
-                    pendingAppUrl = destination;
-                }
-            });
-        }
-
-        // ===================================================================
-        // 7. DESTINATION PROCESSOR
-        // ===================================================================
-        function processDestination(destination) {
-            if (!destination) return;
-            if (isRootDestination(destination)) {
-                console.log('[DeepLink] Root destination – handled by referral logic.');
-                return;
-            }
-            console.log('[DeepLink] Processing destination:', destination);
-            if (appAuthenticated) {
-                console.log('[DeepLink] Authenticated → navigating to:', destination);
-                safeRedirect(destination);
-            } else {
-                console.log('[DeepLink] Auth required – storing for later.');
-                sessionStorage.setItem('redirectAfterLogin', destination);
-                safeRedirect('/pages/welcome.html');
-            }
-        }
-
-        // ===================================================================
-        // 8. ORIENTATION LOCK
-        // ===================================================================
-        let screenOrientation = null;
-
-        async function initOrientation() {
-            try {
-                const module = await import('@capacitor/screen-orientation');
-                screenOrientation = module.ScreenOrientation;
-                await screenOrientation.lock({ orientation: 'portrait' });
-                console.log('[Splash] Orientation locked');
-            } catch (_) {
-                console.warn('[Splash] Orientation lock not available');
-            }
-        }
-        initOrientation();
-
-        // ===================================================================
-        // 9. SAFE REDIRECT (unlock + referral append)
-        // ===================================================================
-        function safeRedirect(targetPath) {
-            if (screenOrientation) {
-                screenOrientation.unlock().catch(() => {});
-            }
-            let target = targetPath;
-            if (referralCode && !target.includes('ref=')) {
-                const sep = target.includes('?') ? '&' : '?';
-                target += sep + 'ref=' + encodeURIComponent(referralCode);
-            }
-            console.log('[Splash] Redirecting to:', target);
-            // Use a microtask to ensure the redirect happens after the current
-            // call stack clears, giving the DOM a chance to update.
-            queueMicrotask(() => {
-                window.location.href = target;
-            });
-        }
-
-        // ===================================================================
-        // 10. PROGRESS CONTROLLER
-        // ===================================================================
-        let progress = 0;
-        let progressComplete = false;
-        let redirectPending = false;
-        const MIN_PROGRESS = 5;
-        const MAX_PROGRESS = 100;
-        let loadInterval = null;
-        let progressResolve = null;
-
-        // Create a promise that resolves when progress reaches 100%
-        const progressReady = new Promise((resolve) => {
-            progressResolve = resolve;
-        });
-
-        function updateProgress(value, text) {
-            const clamped = Math.min(Math.max(value, 0), MAX_PROGRESS);
-            progress = clamped;
-            progressFill.style.width = clamped + '%';
-            if (text) loadingText.textContent = text;
-            if (clamped >= MAX_PROGRESS) {
-                progressComplete = true;
-                spinner.style.display = 'none';
-                loadingText.textContent = '✓ Ready!';
-                if (progressResolve) {
-                    progressResolve();
-                    progressResolve = null;
-                }
-            }
-        }
-
-        // Start the auto-progress animation (slow, steady climb)
-        function startProgressAnimation() {
-            let current = MIN_PROGRESS;
-            updateProgress(current);
-
-            loadInterval = setInterval(() => {
-                if (progressComplete) {
-                    clearInterval(loadInterval);
-                    return;
-                }
-                // Slow down as we approach 80%
-                const step = current < 50 ? 1.5 + Math.random() * 2.5 :
-                    current < 70 ? 1 + Math.random() * 1.5 :
-                    0.5 + Math.random() * 0.8;
-                current = Math.min(current + step, 82);
-                updateProgress(current);
-            }, 150);
-        }
-
-        // Manually complete progress (called when app is ready)
-        function completeProgress() {
-            if (progressComplete) return;
-            clearInterval(loadInterval);
-            updateProgress(100, '✓ Ready!');
-        }
-
-        // ===================================================================
-        // 11. MAIN LOADER
-        // ===================================================================
-        async function loadApp() {
-            try {
-                // ---- (A) Capture Android launch URL ----
-                await captureLaunchUrl();
-                registerAppUrlListener();
-
-                // ---- (B) Detect referral ----
-                let initialReferral = null;
-                if (pendingAppUrl) {
-                    const fullUrl = 'https://medhub.edgeone.app' + pendingAppUrl;
-                    initialReferral = detectReferral(fullUrl);
-                } else {
-                    initialReferral = detectReferral();
-                }
-                referralCode = initialReferral;
-
-                if (referralCode) {
-                    referralBadge.style.display = 'block';
-                    refBadgeCode.textContent = referralCode;
-                }
-
-                // ---- (C) Load core modules ----
-                updateProgress(12, 'Loading core...');
-                await import('/scripts/utils.js');
-
-                updateProgress(28, 'Loading database...');
-                await import('/scripts/db.js');
-
-                updateProgress(44, 'Loading auth...');
-                await import('/scripts/auth.js');
-
-                updateProgress(58, 'Loading app...');
-                const appModule = await import('/scripts/app.js');
-
-                // ---- (D) Initialize app & restore user ----
-                updateProgress(68, 'Restoring session...');
-
-                let isLoggedIn = false;
-                let userData = null;
-
-                try {
-                    // Initialize the app – this loads user from localStorage/db
-                    await appModule.initializeApp();
-
-                    // Check auth state (now that user is loaded)
-                    isLoggedIn = appModule.checkAuth ? appModule.checkAuth() : false;
-
-                    if (isLoggedIn) {
-                        userData = appModule.getUser ? appModule.getUser() : null;
-                        console.log('[Splash] User restored:', userData?.name || 'unknown');
-                    } else {
-                        console.log('[Splash] No user session found.');
-                    }
-                } catch (initErr) {
-                    console.warn('[Splash] Init error, treating as unauthenticated.', initErr);
-                    isLoggedIn = false;
-                }
-
-                appAuthenticated = isLoggedIn;
-                appInitialized = true;
-
-                // ---- (E) Determine redirect target ----
-                let target;
-
-                if (pendingAppUrl) {
-                    const destination = pendingAppUrl;
-                    console.log('[Splash] Incoming deep-link:', destination);
-
-                    if (isRootDestination(destination)) {
-                        target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
-                    } else {
-                        if (isLoggedIn) {
-                            target = destination;
-                        } else {
-                            sessionStorage.setItem('redirectAfterLogin', destination);
-                            target = '/pages/welcome.html';
-                        }
-                    }
-                } else {
-                    target = isLoggedIn ? '/pages/subjects.html' : '/pages/welcome.html';
-                }
-
-                redirectTarget = target;
-                console.log('[Splash] Target determined:', target, '| loggedIn:', isLoggedIn);
-
-                // ---- (F) Complete progress bar ----
-                updateProgress(92, isLoggedIn ? 'Welcome back!' : 'Preparing...');
-                completeProgress();
-
-                // ---- (G) Wait for progress to reach 100% and DOM to paint ----
-                await progressReady;
-
-                // Small extra delay to ensure the visual "Ready!" state is painted
-                await new Promise((r) => setTimeout(r, 350));
-
-                // ---- (H) Redirect ----
-                safeRedirect(target);
-
-            } catch (err) {
-                console.error('[Splash] Load failed, redirecting to welcome:', err);
-                clearInterval(loadInterval);
-
-                // Even on error, complete the progress bar gracefully
-                loadingText.style.color = 'rgba(255,255,255,0.5)';
-                loadingText.textContent = 'Continuing...';
-                completeProgress();
-
-                await progressReady;
-                await new Promise((r) => setTimeout(r, 350));
-
-                safeRedirect('/pages/welcome.html');
-            }
-        }
-
-        // ===================================================================
-        // 12. START
-        // ===================================================================
-
-        // Kick off the progress bar animation immediately
-        startProgressAnimation();
-
-        // Start the app loader after a short delay so the splash screen renders
-        setTimeout(loadApp, 250);
-
-        // ===================================================================
-        // 13. SAFETY TIMEOUT – if progress never completes, force redirect
-        // ===================================================================
-        setTimeout(async () => {
-            if (!progressComplete) {
-                console.warn('[Splash] Safety timeout – forcing redirect to welcome.');
-                clearInterval(loadInterval);
-                completeProgress();
-                await progressReady;
-                await new Promise((r) => setTimeout(r, 300));
-                safeRedirect('/pages/welcome.html');
-            }
-        }, 12000);
-
-        // ===================================================================
-        // 14. OFFLINE / ONLINE (informational)
-        // ===================================================================
-        window.addEventListener('offline', () => {
-            loadingText.textContent = 'Offline mode...';
-        });
-        window.addEventListener('online', () => {
-            loadingText.textContent = 'Online, loading...';
-        });
-    </script>
 </body>
+
 </html>

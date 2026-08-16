@@ -2,7 +2,6 @@
 
 /* ============================================================
    SHIMMER OVERLAY (Full‑screen, dark theme fallback)
-   Loads before any JS – uses inline styles for critical path
    ============================================================ */
 .shimmer-overlay {
     position: fixed;
@@ -39,7 +38,6 @@
 
 /* ============================================================
    INLINE LOADER (for async actions like sending invites)
-   Small spinner that doesn't block the whole UI
    ============================================================ */
 .inline-loader {
     display: inline-flex;
@@ -61,7 +59,7 @@
 }
 
 /* ============================================================
-   FIXED HEADER (2 rows) – existing styles preserved
+   FIXED HEADER (2 rows)
    ============================================================ */
 .fixed-header {
     position: sticky;
@@ -161,17 +159,12 @@
     border: 1px solid var(--border);
 }
 
-/* Remove background summary wrapper (no duplication) */
-.summary-wrapper {
-    display: none;
-}
-
 /* ============================================================
-   FLOATING BOTTOM CARD  (now with dynamic top via JS)
+   FLOATING BOTTOM CARD
    ============================================================ */
 .bottom-card {
     position: fixed;
-    /* top is set dynamically by JS to match header bottom */
+    /* top is set dynamically by JS */
     top: auto;                /* fallback, overridden by inline style */
     bottom: 0;
     left: 0;
@@ -181,7 +174,6 @@
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -10px 30px rgba(0,0,0,0.2);
     padding: 1.5rem 1.5rem 1rem;
-    /* height is auto – card stretches from dynamic top to bottom */
     height: auto;
     max-height: none;
     overflow-y: auto;
@@ -250,7 +242,7 @@
     font-size: 0.9rem;
 }
 
-/* Question stepper – wider input, +/- on same line */
+/* Question stepper */
 .question-stepper {
     display: flex;
     align-items: center;
@@ -443,7 +435,7 @@
     accent-color: var(--accent);
 }
 
-/* Action row (back + primary) */
+/* Action row */
 .action-row {
     display: flex;
     gap: 0.75rem;
@@ -500,13 +492,87 @@
     font-weight: bold;
 }
 
+/* Join code section */
+.join-code-row {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+.join-code-row p {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+.join-code-row input {
+    transition: border-color 0.2s;
+}
+.join-code-row input:focus {
+    border-color: var(--accent);
+}
+
+/* Share link area */
+.share-link-area {
+    margin-top: 0.75rem;
+    display: none;
+}
+.share-link-area label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+.share-link-area input {
+    font-family: monospace;
+    font-size: 0.9rem;
+    width: 100%;
+    padding: 0.5rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+.share-link-area .btn-sm {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    padding: 0.3rem 0.8rem;
+    border-radius: 30px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.share-link-area .btn-sm:hover {
+    background: var(--border);
+}
+
+/* Challenge status */
+#challenge-status {
+    margin: 0.5rem 0;
+    font-weight: 500;
+}
+.challenge-code-display {
+    background: var(--bg-card);
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    font-family: monospace;
+    font-size: 1.2rem;
+    text-align: center;
+    margin: 0.5rem 0;
+}
+.waiting-message {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+.challenge-actions {
+    margin-top: 0.5rem;
+}
+.challenge-actions .btn-sm {
+    margin-right: 0.5rem;
+}
+
 /* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 640px) {
     .bottom-card {
         padding: 1rem;
-        /* Let the card fill the screen naturally, no fixed height */
         height: auto;
         max-height: none;
     }

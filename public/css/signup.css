@@ -2,6 +2,83 @@
 
 /* ===== MULTI-STEP FORM STYLES ===== */
 
+/* Fixed header styles (unchanged) */
+.fixed-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 1rem;
+}
+
+.header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header-row.top {
+    margin-bottom: 0.3rem;
+}
+
+.header-row .logo-area {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.header-row .logo-area img {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+}
+
+.header-row .logo-area span {
+    font-weight: 600;
+    font-size: 1.2rem;
+}
+
+.header-row .btn-outline {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    padding: 0.3rem 0.6rem;
+    border-radius: 30px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.header-row .btn-outline:hover {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+.header-row .nav-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.9rem;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0.3rem 0.6rem;
+}
+
+.header-row .nav-link:hover {
+    color: var(--text-primary);
+    text-decoration: underline;
+}
+
+.header-row .login-link {
+    font-weight: 500;
+}
+
+.header-row .login-link:hover {
+    color: var(--accent);
+}
+
 .form-container {
     max-width: 650px;
     margin: 2rem auto;
@@ -41,6 +118,7 @@ h1 {
         opacity: 0;
         transform: translateY(10px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);
@@ -73,7 +151,9 @@ label {
     font-size: 0.9rem;
 }
 
-input, select, textarea {
+input,
+select,
+textarea {
     width: 100%;
     padding: 0.75rem 1rem;
     border: 2px solid var(--border);
@@ -85,7 +165,8 @@ input, select, textarea {
     transition: all 0.2s ease;
 }
 
-input:focus, select:focus {
+input:focus,
+select:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
@@ -188,7 +269,8 @@ input.error:focus {
 
 /* ===== HELPER TEXT ===== */
 
-small, .small {
+small,
+.small {
     display: block;
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -221,8 +303,15 @@ small, .small {
 }
 
 @keyframes bounce {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-20px); }
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-20px);
+    }
 }
 
 #step3 h2 {
@@ -276,24 +365,24 @@ footer .btn-text:hover {
         padding: 1.5rem;
         margin: 1rem;
     }
-    
+
     .form-row {
         flex-direction: column;
         gap: 1.5rem;
     }
-    
+
     .button-group {
         flex-direction: column;
     }
-    
+
     .button-group button {
         width: 100%;
     }
-    
+
     h1 {
         font-size: 1.5rem;
     }
-    
+
     .reveal-btn {
         top: 2.3rem;
     }
@@ -341,7 +430,9 @@ footer .btn-text:hover {
 /* ===== ANIMATIONS ===== */
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* ===== SECURITY QUESTIONS SECTION ===== */
@@ -393,6 +484,7 @@ footer .btn-text:hover {
         opacity: 0;
         transform: translateY(20px);
     }
+
     to {
         opacity: 1;
         transform: translateY(0);

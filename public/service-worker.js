@@ -1,4 +1,4 @@
-// frontend-user/public/service-worker.js
+// public/service-worker.js
 const CACHE_VERSION = 'v3.0';
 const CACHE_NAME = `medexam-${CACHE_VERSION}`;
 
@@ -51,31 +51,30 @@ async function decryptData(encryptedText) {
     }
 }
 
-// ====== MANUAL LIST OF FILES TO CACHE (STATIC) ======
+// ====== ASSETS TO CACHE ======
 const STATIC_ASSETS = [
-    // Root & manifest
+    // Application shell
+    '/',
+    '/index.html',
     '/manifest.json',
 
-    // assets/images
+    // Assets
     '/assets/images/logo 1.png',
     '/assets/images/logo-144x144.png',
     '/assets/images/logo.jpeg',
     '/assets/images/logo.png',
     '/assets/images/qr-code.jpeg',
 
-    // CSS
-    '/css/ai.css',
+    // Global CSS
     '/css/common.css',
+
+    // Page‑specific CSS (all)
+    '/css/ai.css',
     '/css/content.css',
     '/css/exam-room.css',
     '/css/exam-settings.css',
-    '/css/fa-brands-400.woff2',
-    '/css/fa-regular-400.woff2',
-    '/css/fa-solid-900.woff2',
-    '/css/fa-v4compatibility.woff2',
     '/css/forgot-password.css',
     '/css/free-trial.css',
-    '/css/index.css',
     '/css/locked.css',
     '/css/login.css',
     '/css/notes.css',
@@ -94,43 +93,46 @@ const STATIC_ASSETS = [
     '/css/viewer.css',
     '/css/welcome.css',
 
-    // Pages (exclude shared-exam, shared-note)
-    '/pages/index.html',
-    '/pages/ai.html',
-    '/pages/exam-room.html',
-    '/pages/exam-settings.html',
-    '/pages/forgot-password.html',
-    '/pages/free-trial.html',
-    '/pages/locked.html',
-    '/pages/login.html',
-    '/pages/notes.html',
-    '/pages/notifications.html',
-    '/pages/offline.html',
-    '/pages/payment.html',
-    '/pages/performance.html',
-    '/pages/privacy.html',
-    '/pages/profile.html',
-    '/pages/resource-browser.html',
-    '/pages/results.html',
-    '/pages/signup.html',
-    '/pages/subject-specific.html',
-    '/pages/subjects.html',
-    '/pages/subscription.html',
-    '/pages/terms.html',
-    '/pages/welcome.html',
+    // Font Awesome (if served from /css/ – adjust if from /libs/)
+    '/css/fa-brands-400.woff2',
+    '/css/fa-regular-400.woff2',
+    '/css/fa-solid-900.woff2',
+    '/css/fa-v4compatibility.woff2',
 
-    // Root-level scripts
-    '/scripts/ai.js',
-    '/scripts/analytics.js',
-    '/scripts/exam-engine.js',
-    '/scripts/help.js',
-    '/scripts/notes.js',
-    '/scripts/performance-rating-v2.js',
-    '/scripts/questions.js',
+    // Core scripts (shared)
+    '/scripts/app.js',
+    '/scripts/auth.js',
+    '/scripts/db.js',
+    '/scripts/page-loader.js',
+    '/scripts/page-manager.js',
     '/scripts/router.js',
+    '/scripts/ui.js',
+    '/scripts/utils.js',
+    '/scripts/events.js',
+    '/scripts/updates.js',
+    '/scripts/security.js',
+    '/scripts/sync.js',
+    '/scripts/subscription.js',
+    '/scripts/notifications.js',
+    '/scripts/referral.js',
+    '/scripts/timeVerifier.js',
+    '/scripts/convex-client.js',
+    '/scripts/exam-engine.js',
+    '/scripts/questions.js',
+    '/scripts/analytics.js',
+    '/scripts/performance-rating-v2.js',
+    '/scripts/performance-ai.js',
+    '/scripts/pdf-engine.js',
+    '/scripts/content.js',
+    '/scripts/resource-browser.js',
+    '/scripts/viewer.js',
+    '/scripts/exam-chat.js',
+    '/scripts/timer.js',
     '/scripts/validation.js',
+    '/scripts/help.js',
+    '/scripts/offline.js',
 
-    // Page-specific scripts
+    // Page‑specific scripts (all pages)
     '/scripts/pages/ai.js',
     '/scripts/pages/exam-room.js',
     '/scripts/pages/exam-settings.js',
@@ -151,21 +153,59 @@ const STATIC_ASSETS = [
     '/scripts/pages/subjects.js',
     '/scripts/pages/subscription.js',
     '/scripts/pages/welcome.js',
+
+    // Page HTML fragments (all pages)
+    '/pages/ai.html',
+    '/pages/exam-room.html',
+    '/pages/exam-settings.html',
+    '/pages/forgot-password.html',
+    '/pages/free-trial.html',
+    '/pages/locked.html',
+    '/pages/login.html',
+    '/pages/notes.html',
+    '/pages/notifications.html',
+    '/pages/payment.html',
+    '/pages/performance.html',
+    '/pages/privacy.html',
+    '/pages/profile.html',
+    '/pages/resource-browser.html',
+    '/pages/results.html',
+    '/pages/shared-exam.html',
+    '/pages/shared-note.html',
+    '/pages/signup.html',
+    '/pages/subject-specific.html',
+    '/pages/subjects.html',
+    '/pages/subscription.html',
+    '/pages/terms.html',
+    '/pages/welcome.html',
+
+    // Offline fallback
+    '/pages/offline.html',
+
+    // Libraries (if served from /libs/)
+    '/libs/quill/quill.snow.css',
+    '/libs/quill/quill.min.js',
+    '/libs/chart/chart.min.js',
+    '/libs/pdfkit.standalone.js',
+    '/libs/pdfjs/pdf.min.js',
+    '/libs/pdfjs/pdf.worker.min.js',
+    '/libs/fontawesome/css/all.min.css',
+    '/libs/fontawesome/webfonts/fa-brands-400.woff2',
+    '/libs/fontawesome/webfonts/fa-regular-400.woff2',
+    '/libs/fontawesome/webfonts/fa-solid-900.woff2',
+    '/libs/fontawesome/webfonts/fa-v4compatibility.woff2',
 ];
 
 // ====== FILES THAT MUST NEVER BE CACHED ======
 const EXCLUDED_PATHS = [
-    '/',                      // root → index.html (network‑first)
+    // Shared exam pages are dynamic and should not be cached
     '/pages/shared-exam.html',
     '/pages/shared-note.html',
-    // ⚠️ /data/questions/ is NO LONGER excluded – we cache them now!
+    // Manifest (handled separately)
 ];
 
 function isExcluded(url) {
-    if (EXCLUDED_PATHS.includes(url.pathname)) return true;
-    // Skip manifest.json and assetlinks.json from decryption/caching?
-    // We'll handle them in the fetch logic below.
-    return false;
+    return EXCLUDED_PATHS.includes(url.pathname);
 }
 
 // ====== INSTALL ======
@@ -201,16 +241,14 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
     const url = new URL(event.request.url);
 
-    // Ignore cross-origin (except Google Fonts / Quill)
+    // Ignore cross‑origin (except external libraries)
     if (url.origin !== self.location.origin &&
         !url.href.includes('fonts.googleapis.com') &&
         !url.href.includes('cdn.quilljs.com')) {
         return;
     }
 
-    // ============================================================
-    // 1. SPECIAL HANDLER FOR JSON FILES (encrypted question data)
-    // ============================================================
+    // 1. Special handler for encrypted JSON files (questions)
     if (url.pathname.endsWith('.json') &&
         url.origin === self.location.origin &&
         !url.pathname.includes('manifest.json') &&
@@ -220,25 +258,22 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    // ============================================================
-    // 2. EXCLUDED FILES → network only
-    // ============================================================
+    // 2. Excluded paths → network only
     if (isExcluded(url)) {
         event.respondWith(fetch(event.request));
         return;
     }
 
-    // ============================================================
-    // 3. ALL OTHER STATIC ASSETS → cache‑first
-    // ============================================================
+    // 3. All other static assets → cache‑first
     event.respondWith(
         caches.match(event.request)
             .then(cached => {
                 if (cached) return cached;
-                // fallback: go network
+                // fallback to network
                 return fetch(event.request);
             })
             .catch(() => {
+                // If navigation fails, serve offline page
                 if (event.request.mode === 'navigation') {
                     return caches.match('/pages/offline.html');
                 }
@@ -265,7 +300,6 @@ async function handleJsonRequest(request) {
         // 2) Fallback to network
         const networkResponse = await fetch(request);
         if (networkResponse.ok) {
-            // Clone the response so we can read the body and cache it
             const clonedResponse = networkResponse.clone();
             const encryptedText = await clonedResponse.text();
 

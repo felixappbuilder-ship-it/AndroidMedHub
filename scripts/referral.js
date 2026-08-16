@@ -1,4 +1,4 @@
-// frontend-user/scripts/referral.js
+// scripts/referral.js
 
 /**
  * Referral System Module – Convex Integration
@@ -10,7 +10,8 @@
 
 import * as utils from './utils.js';
 import * as ui from './ui.js';
-import * as app from './app.js';
+import * as auth from './auth.js';
+import * as router from './router.js';
 import { convexHttpClient } from './convex-client.js';
 import { getToken } from './auth.js';
 import * as db from './db.js';
@@ -38,9 +39,9 @@ function handleTokenError(error) {
         console.warn('[Referral] Token invalid, logging out...');
         utils.removeLocalStorage('accessToken');
         utils.removeLocalStorage('sessionId');
-        app.clearUser();
+        auth.clearUser();
         ui.showToast('Session expired. Please login again.', 'warning');
-        window.location.href = '/pages/login.html';
+        router.navigateTo('login'); // clean URL
         return true;
     }
     return false;

@@ -1,4 +1,4 @@
-// frontend-user/scripts/resource-browser.js
+// scripts/resource-browser.js
 
 /**
  * Resource Browser Module
@@ -46,15 +46,6 @@ export const docMap = new Map();
 // Thumbnail cache – maps resourceId -> object URL (only for downloaded items)
 const thumbnailCache = new Map();
 
-// ==================== DOM REFS ====================
-const grid = document.getElementById('resource-grid');
-const loadMoreBtn = document.getElementById('load-more-btn');
-const loadMoreSpinner = document.getElementById('load-more-spinner');
-const pageTitle = document.getElementById('page-title');
-const searchInput = document.getElementById('search-input');
-const filterBtn = document.getElementById('filter-btn');
-const filterDropdown = document.getElementById('filter-dropdown');
-
 // ==================== FAVORITES HELPERS ====================
 function getFavorites() {
     return JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
@@ -91,7 +82,12 @@ function filterDocuments(docs, filterType, searchTerm) {
 
 // ==================== RENDER FUNCTIONS ====================
 function applyFiltersAndRender() {
-    const filtered = filterDocuments(allDocuments, currentFilter, searchInput.value);
+    const grid = document.getElementById('resource-grid');
+    if (!grid) {
+        console.error('[ResourceBrowser] resource-grid not found!');
+        return;
+    }
+    const filtered = filterDocuments(allDocuments, currentFilter, document.getElementById('search-input').value);
     if (filtered.length === 0) {
         grid.innerHTML = '<div class="no-data">No resources match your criteria.</div>';
         return;
@@ -100,18 +96,10 @@ function applyFiltersAndRender() {
     attachCardEventListeners();
 }
 
-/**
- * Returns the thumbnail source:
- * - If downloaded and cached: object URL from IndexedDB
- * - Else if public URL exists: the public URL (for display only)
- * - Otherwise: null (placeholder)
- */
 function getThumbnailSrc(doc) {
-    // If we have a cached blob (from download), use it
     if (thumbnailCache.has(doc._id)) {
         return thumbnailCache.get(doc._id);
     }
-    // Otherwise, use the public URL (if available)
     if (doc.thumbnailUrl) {
         return doc.thumbnailUrl;
     }
@@ -185,7 +173,7 @@ function attachCardEventListeners() {
             const hasActive = await subscription.hasActiveSubscription();
             if (!hasActive) {
                 ui.showToast('Subscription required to download', 'warning');
-                router.navigateTo('subscription.html');
+                router.navigateTo('subscription');
                 return;
             }
             startDownload(id);
@@ -233,11 +221,12 @@ function attachCardEventListeners() {
             e.stopPropagation();
             const id = btn.dataset.id;
             if (!confirm('Delete this downloaded file?')) return;
+            // Remove file blob and thumbnail blob
             await db.deleteFileBlob(id);
+            await db.deleteThumbnailBlob(id); // new: also delete thumbnail
             const manifest = content.getDownloadManifest();
             delete manifest[id];
             content.setDownloadManifest(manifest);
-            // Also remove thumbnail cache
             thumbnailCache.delete(id);
             const doc = docMap.get(id);
             if (doc) {
@@ -254,17 +243,25 @@ function attachCardEventListeners() {
     });
 }
 
-// ==================== THUMBNAIL CACHING (ONLY DURING DOWNLOAD) ====================
-
+// ==================== THUMBNAIL CACHING ====================
 /**
- * Fetch and store a thumbnail using a signed URL from the backend.
- * Called only during download – not during normal browsing.
+ * Cache a thumbnail from a signed URL.
+ * @param {string} resourceId
+ * @param {string} thumbnailUrl - signed URL (or null)
+ * @returns {Promise<boolean>} true if thumbnail was successfully cached
  */
-async function cacheThumbnail(doc) {
-    const resourceId = doc._id;
-    if (thumbnailCache.has(resourceId)) return true;
+async function cacheThumbnail(resourceId, thumbnailUrl) {
+    if (!thumbnailUrl) {
+        console.warn(`[Thumbnail] No thumbnail URL for ${resourceId}`);
+        return false;
+    }
 
-    // 1. Check IndexedDB first (in case it was cached earlier)
+    // Already cached in memory
+    if (thumbnailCache.has(resourceId)) {
+        return true;
+    }
+
+    // Check IndexedDB
     const existing = await db.getThumbnailBlob(resourceId);
     if (existing) {
         const url = URL.createObjectURL(existing);
@@ -272,28 +269,49 @@ async function cacheThumbnail(doc) {
         return true;
     }
 
-    if (!navigator.onLine) return false;
-    if (!doc.r2ThumbnailKey) return false;
-
     try {
-        // Request a signed URL from the backend
-        const result = await convexHttpClient.action('resources/actions:getThumbnailUrl', {
-            r2Key: doc.r2ThumbnailKey
-        });
-        if (!result.success) return false;
-
-        const response = await fetch(result.data.url);
-        if (!response.ok) return false;
-
+        const response = await fetch(thumbnailUrl);
+        if (!response.ok) {
+            throw new Error(`Thumbnail request failed: HTTP ${response.status}`);
+        }
         const blob = await response.blob();
+        if (!blob.size) {
+            throw new Error('Thumbnail response was empty');
+        }
+
         await db.saveThumbnailBlob(resourceId, blob);
         const url = URL.createObjectURL(blob);
         thumbnailCache.set(resourceId, url);
+
+        console.log(`[Thumbnail] Cached successfully: ${resourceId} (${blob.size} bytes)`);
         return true;
     } catch (err) {
-        console.warn(`[Thumbnail] Signed URL fetch failed for ${resourceId}:`, err);
+        console.error(`[Thumbnail] Failed for ${resourceId}:`, err);
         return false;
     }
+}
+
+/**
+ * Hydrate the in-memory thumbnail cache from IndexedDB.
+ * Called after resources are loaded.
+ * @param {Array} docs - list of resource documents
+ */
+async function hydrateThumbnailCache(docs) {
+    await Promise.all(
+        docs.map(async (doc) => {
+            const id = doc._id;
+            if (thumbnailCache.has(id)) return;
+
+            try {
+                const blob = await db.getThumbnailBlob(id);
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                thumbnailCache.set(id, url);
+            } catch (err) {
+                console.warn(`[Thumbnail] Failed to restore ${id}:`, err);
+            }
+        })
+    );
 }
 
 // ==================== DOWNLOAD LOGIC ====================
@@ -335,11 +353,10 @@ async function startDownload(resourceId) {
         const token = getToken();
         if (!token) {
             ui.showToast('Please log in again.', 'warning');
-            router.navigateTo('login.html');
+            router.navigateTo('login');
             return;
         }
 
-        // 1. Get signed download URL for the main file
         const result = await convexHttpClient.action('resources/actions:getDownloadUrl', {
             token,
             resourceId
@@ -348,17 +365,17 @@ async function startDownload(resourceId) {
             if (result.message && (result.message.includes('token') || result.message.includes('JWT'))) {
                 ui.showToast('Session expired. Please log in again.', 'warning');
                 await logout();
-                router.navigateTo('login.html');
+                router.navigateTo('login');
                 return;
             }
             throw new Error(result.message);
         }
-        const { downloadUrl } = result.data;
 
-        // 2. Download the main file with progress
-        const response = await fetch(downloadUrl, {
-            signal: abortController.signal
-        });
+        // NEW: destructure both URLs
+        const { downloadUrl, thumbnailUrl } = result.data;
+
+        // ================== Download main file ==================
+        const response = await fetch(downloadUrl, { signal: abortController.signal });
         if (!response.ok) throw new Error('Download failed');
         const contentLength = response.headers.get('content-length');
         const total = contentLength ? parseInt(contentLength, 10) : 0;
@@ -383,26 +400,34 @@ async function startDownload(resourceId) {
         const blob = new Blob(chunks);
         await db.saveFileBlob(resourceId, blob);
 
-        // 3. Update download manifest
+        // ================== Cache thumbnail ==================
+        let thumbnailDownloaded = false;
+        if (thumbnailUrl) {
+            thumbnailDownloaded = await cacheThumbnail(resourceId, thumbnailUrl);
+        }
+
+        // ================== Update manifest ==================
         const manifest = content.getDownloadManifest();
         manifest[resourceId] = {
             downloadedAt: Date.now(),
             size: blob.size,
-            mime: response.headers.get('content-type') || 'application/octet-stream'
+            mime: response.headers.get('content-type') || 'application/octet-stream',
+            thumbnailDownloaded   // new flag
         };
         content.setDownloadManifest(manifest);
 
-        // 4. Cache the thumbnail (using signed URL)
-        if (doc) {
-            await cacheThumbnail(doc);
-        }
-
-        // 5. Update UI to show the resource as downloaded
+        // ================== Update UI ==================
         if (doc) {
             card.outerHTML = createResourceCard(doc);
             attachCardEventListeners();
         }
-        ui.showToast('Download complete', 'success');
+
+        ui.showToast(
+            thumbnailDownloaded
+                ? 'Download complete'
+                : 'File downloaded, but thumbnail could not be cached',
+            thumbnailDownloaded ? 'success' : 'warning'
+        );
 
     } catch (error) {
         if (error.name === 'AbortError') {
@@ -429,34 +454,55 @@ async function loadResources(reset = true) {
         currentCursor = null;
         hasMore = true;
         allDocuments = [];
-        loadMoreBtn.style.display = 'none';
-        loadMoreSpinner.style.display = 'none';
+        const loadMoreBtn = document.getElementById('load-more-btn');
+        const loadMoreSpinner = document.getElementById('load-more-spinner');
+        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+        if (loadMoreSpinner) loadMoreSpinner.style.display = 'none';
     } else {
-        loadMoreSpinner.style.display = 'block';
-        loadMoreBtn.style.display = 'none';
+        const loadMoreSpinner = document.getElementById('load-more-spinner');
+        const loadMoreBtn = document.getElementById('load-more-btn');
+        if (loadMoreSpinner) loadMoreSpinner.style.display = 'block';
+        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
     }
 
-    const result = await content.fetchResources(
-        currentSubject,
-        currentCategory,
-        currentCursor,
-        {}
-    );
+    try {
+        console.log(`[ResourceBrowser] Fetching resources: subject=${currentSubject}, category=${currentCategory}, cursor=${currentCursor}`);
+        const result = await content.fetchResources(
+            currentSubject,
+            currentCategory,
+            currentCursor,
+            {}
+        );
+        console.log('[ResourceBrowser] fetchResources result:', result);
 
-    if (reset) {
-        allDocuments = result.documents;
-    } else {
-        allDocuments = allDocuments.concat(result.documents);
+        if (reset) {
+            allDocuments = result.documents;
+        } else {
+            allDocuments = allDocuments.concat(result.documents);
+        }
+        allDocuments.forEach(d => docMap.set(d._id, d));
+
+        currentCursor = result.cursor;
+        hasMore = result.hasMore;
+        const loadMoreBtn = document.getElementById('load-more-btn');
+        if (loadMoreBtn) loadMoreBtn.style.display = hasMore ? 'inline-block' : 'none';
+        const loadMoreSpinner = document.getElementById('load-more-spinner');
+        if (loadMoreSpinner) loadMoreSpinner.style.display = 'none';
+        isLoading = false;
+
+        // NEW: hydrate thumbnail cache from IndexedDB
+        await hydrateThumbnailCache(allDocuments);
+
+        applyFiltersAndRender();
+    } catch (error) {
+        console.error('[ResourceBrowser] Error loading resources:', error);
+        ui.showToast('Failed to load resources: ' + error.message, 'error');
+        isLoading = false;
+        const grid = document.getElementById('resource-grid');
+        if (grid) {
+            grid.innerHTML = `<div class="error-message">Error loading resources: ${error.message}</div>`;
+        }
     }
-    allDocuments.forEach(d => docMap.set(d._id, d));
-
-    currentCursor = result.cursor;
-    hasMore = result.hasMore;
-    loadMoreBtn.style.display = hasMore ? 'inline-block' : 'none';
-    loadMoreSpinner.style.display = 'none';
-    isLoading = false;
-
-    applyFiltersAndRender();
 }
 
 // ==================== VIEWER COORDINATION ====================
@@ -469,40 +515,93 @@ export function closeViewer() {
 }
 
 // ==================== INITIALIZATION ====================
-export async function initResourceBrowser(subject, type) {
+export async function initResourceBrowser(subject, type, forceRefresh = false) {
+    console.log(`[ResourceBrowser] initResourceBrowser called: subject=${subject}, type=${type}, forceRefresh=${forceRefresh}`);
+
+    // Re‑acquire DOM refs (they are fresh after each page navigation)
+    const pageTitle = document.getElementById('page-title');
+    const searchInput = document.getElementById('search-input');
+    const filterBtn = document.getElementById('filter-btn');
+    const filterDropdown = document.getElementById('filter-dropdown');
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    const loadMoreSpinner = document.getElementById('load-more-spinner');
+
+    if (!pageTitle) {
+        console.error('[ResourceBrowser] page-title element not found!');
+        return;
+    }
+
     currentSubject = subject;
     currentCategory = CATEGORY_MAP[type] || type;
+    console.log(`[ResourceBrowser] currentSubject=${currentSubject}, currentCategory=${currentCategory}`);
 
     const typeName = TYPE_NAMES[type] || 'Resources';
     pageTitle.textContent = `${typeName} – ${subject}`;
+    console.log(`[ResourceBrowser] Title set to: ${pageTitle.textContent}`);
 
+    // Reset state and load resources
     await loadResources(true);
 
     // ---- Event listeners ----
-    searchInput.addEventListener('input', debounce(() => applyFiltersAndRender(), 300));
-    filterBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        filterDropdown.classList.toggle('open');
-    });
-    document.addEventListener('click', () => filterDropdown.classList.remove('open'));
+    // Remove old listeners by cloning? Better to re‑attach fresh.
+    // We'll use a simple approach: remove and re‑add.
 
-    filterDropdown.querySelectorAll('button').forEach(btn => {
-        btn.addEventListener('click', () => {
-            currentFilter = btn.dataset.filter;
-            filterDropdown.querySelectorAll('button').forEach(b => b.classList.remove('active-filter'));
-            btn.classList.add('active-filter');
-            filterDropdown.classList.remove('open');
-            applyFiltersAndRender();
+    // Search input
+    const newSearchInput = document.getElementById('search-input');
+    if (newSearchInput) {
+        // Remove any existing listener by replacing with a new one
+        newSearchInput.removeEventListener('input', searchHandler);
+        newSearchInput.addEventListener('input', debounce(() => applyFiltersAndRender(), 300));
+    }
+
+    // Filter button
+    const newFilterBtn = document.getElementById('filter-btn');
+    if (newFilterBtn) {
+        newFilterBtn.removeEventListener('click', filterToggleHandler);
+        newFilterBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const dropdown = document.getElementById('filter-dropdown');
+            if (dropdown) dropdown.classList.toggle('open');
         });
-    });
+    }
 
-    loadMoreBtn.addEventListener('click', () => loadResources(false));
+    // Dropdown items
+    const dropdown = document.getElementById('filter-dropdown');
+    if (dropdown) {
+        dropdown.querySelectorAll('button').forEach(btn => {
+            btn.removeEventListener('click', filterSelectHandler);
+            btn.addEventListener('click', () => {
+                currentFilter = btn.dataset.filter;
+                dropdown.querySelectorAll('button').forEach(b => b.classList.remove('active-filter'));
+                btn.classList.add('active-filter');
+                dropdown.classList.remove('open');
+                applyFiltersAndRender();
+            });
+        });
+    }
 
-    window.addEventListener('click', (e) => {
+    // Load more
+    const newLoadMoreBtn = document.getElementById('load-more-btn');
+    if (newLoadMoreBtn) {
+        newLoadMoreBtn.removeEventListener('click', loadMoreHandler);
+        newLoadMoreBtn.addEventListener('click', () => loadResources(false));
+    }
+
+    // Global click to close dropdown
+    document.removeEventListener('click', closeDropdownHandler);
+    document.addEventListener('click', (e) => {
         if (!e.target.closest('.filter-wrapper')) {
-            filterDropdown.classList.remove('open');
+            const dropdown = document.getElementById('filter-dropdown');
+            if (dropdown) dropdown.classList.remove('open');
         }
     });
+
+    // Define handlers (for removal)
+    function searchHandler(e) { applyFiltersAndRender(); }
+    function filterToggleHandler(e) { /* handled inline */ }
+    function filterSelectHandler(e) { /* handled inline */ }
+    function loadMoreHandler(e) { loadResources(false); }
+    function closeDropdownHandler(e) { /* handled inline */ }
 }
 
 // ==================== DEBOUNCE ====================

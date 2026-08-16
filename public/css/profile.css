@@ -569,3 +569,277 @@ footer {
         flex-direction: row;
     }
 }
+/* ===== ADDITIONAL STYLES (from inline) ===== */
+
+/* ----- Fixed Header (two rows) ----- */
+.fixed-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 1rem;
+}
+.header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.header-row.top {
+    margin-bottom: 0.3rem;
+}
+.header-row .left-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.header-row .left-group img {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+}
+.header-row .left-group .brand {
+    font-weight: 600;
+    font-size: 1.2rem;
+}
+.header-row .left-group .btn-text {
+    font-size: 0.9rem;
+    padding: 0.3rem 0.6rem;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.2s, color 0.2s;
+}
+.header-row .left-group .btn-text:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+.header-row .right-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.header-row .btn-outline {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    padding: 0.3rem 0.6rem;
+    border-radius: 30px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.header-row .btn-outline:hover {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+.header-row.bottom .title-area {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.header-row.bottom .title-area h1 {
+    font-size: 1.2rem;
+    margin: 0;
+}
+#header-status {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+/* ----- Institution dropdown ----- */
+.institution-wrapper {
+    position: relative;
+}
+.institution-wrapper input {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+.institution-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 10;
+    display: none;
+    box-shadow: var(--shadow);
+}
+.institution-dropdown.show {
+    display: block;
+}
+.institution-dropdown .item {
+    padding: 0.5rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+}
+.institution-dropdown .item:hover {
+    background: var(--bg-secondary);
+}
+.institution-dropdown .item.selected {
+    background: var(--accent);
+    color: white;
+}
+.institution-dropdown .no-result {
+    padding: 0.5rem;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+/* ===== SHIMMER LOADER ===== */
+#shimmer-loader {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: #0d1117;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 0;
+    transition: opacity 0.35s ease-out;
+    opacity: 1;
+    pointer-events: all;
+    overflow-y: auto;
+}
+#shimmer-loader.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+#shimmer-loader.removed {
+    display: none;
+}
+
+@keyframes shimmer {
+    0% { background-position: -300px 0; }
+    100% { background-position: 300px 0; }
+}
+.shimmer-skeleton {
+    background: linear-gradient(90deg, #1c1f2a 0%, #252836 40%, #2a2d3d 50%, #252836 60%, #1c1f2a 100%);
+    background-size: 600px 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    border-radius: 6px;
+}
+.shimmer-container {
+    width: 100%;
+    max-width: 600px;
+    padding: 0 1rem;
+    box-sizing: border-box;
+    margin: 0 auto;
+}
+.shimmer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #1e2230;
+    width: 100%;
+    box-sizing: border-box;
+    position: sticky;
+    top: 0;
+    background: #0d1117;
+    z-index: 2;
+}
+.shimmer-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.shimmer-logo { width: 32px; height: 32px; border-radius: 6px; flex-shrink: 0; }
+.shimmer-brand { width: 60px; height: 18px; border-radius: 4px; }
+.shimmer-header-btn { width: 70px; height: 20px; border-radius: 4px; }
+.shimmer-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.shimmer-icon-btn { width: 36px; height: 36px; border-radius: 50%; }
+
+.shimmer-subheader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid #1e2230;
+    width: 100%;
+    box-sizing: border-box;
+    background: #0d1117;
+}
+.shimmer-title { width: 90px; height: 22px; border-radius: 4px; }
+.shimmer-status { width: 140px; height: 16px; border-radius: 4px; }
+
+.shimmer-tabs {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 2px solid #1e2230;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+.shimmer-tab { width: 80px; height: 36px; border-radius: 4px; flex-shrink: 0; }
+
+.shimmer-form {
+    padding: 1rem 1rem 0;
+    width: 100%;
+    box-sizing: border-box;
+    max-width: 600px;
+    margin: 0 auto;
+}
+.shimmer-label { width: 90px; height: 14px; border-radius: 4px; margin-bottom: 0.5rem; }
+.shimmer-input { width: 100%; height: 42px; border-radius: 6px; margin-bottom: 1.25rem; }
+.shimmer-row { display: flex; gap: 1rem; width: 100%; }
+.shimmer-row .shimmer-input-half { flex: 1; height: 42px; border-radius: 6px; margin-bottom: 1.25rem; }
+.shimmer-btn { width: 140px; height: 40px; border-radius: 30px; margin-top: 0.5rem; }
+
+.shimmer-card {
+    width: 100%;
+    max-width: 600px;
+    margin: 1.5rem auto;
+    padding: 1rem;
+    box-sizing: border-box;
+    background: #111620;
+    border-radius: 8px;
+    border: 1px solid #1e2230;
+}
+.shimmer-card-title { width: 110px; height: 18px; border-radius: 4px; margin-bottom: 0.75rem; }
+.shimmer-card-line { width: 100%; height: 14px; border-radius: 4px; margin-bottom: 0.5rem; }
+.shimmer-card-line.short { width: 60%; }
+
+.shimmer-spinner {
+    width: 28px; height: 28px;
+    border: 3px solid #1e2230;
+    border-top-color: #4f8ef7;
+    border-radius: 50%;
+    animation: shimmer-spin 0.8s linear infinite;
+    margin: 2rem auto 1rem;
+}
+@keyframes shimmer-spin { to { transform: rotate(360deg); } }
+.shimmer-loading-text {
+    text-align: center;
+    color: #6b7280;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+    letter-spacing: 0.02em;
+}
+
+/* ----- Responsive Shimmer ----- */
+@media (max-width: 400px) {
+    .shimmer-header-btn { display: none; }
+    .shimmer-tab { width: 60px; height: 30px; }
+    .shimmer-tabs { gap: 0.35rem; padding: 0.5rem 0.6rem; }
+    .shimmer-form { padding: 0.75rem 0.6rem 0; }
+    .shimmer-row { flex-direction: column; gap: 0; }
+}

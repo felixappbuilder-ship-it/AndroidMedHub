@@ -198,7 +198,7 @@
     font-size: 0.875rem;
 }
 
-/* ---------- CTA SECTION (only the trial button remains) ---------- */
+/* ---------- CTA SECTION ---------- */
 .trial-actions {
     display: flex;
     flex-direction: column;
@@ -316,5 +316,198 @@
         font-size: 1rem;
         padding: 14px 20px;
         border-radius: 28px;
+    }
+}
+
+/* ================================================================
+   SHIMMER OVERLAY (from inline styles)
+   ================================================================ */
+:root {
+    --shimmer-bg: #12151c;
+    --shimmer-skeleton: #1e2230;
+    --shimmer-highlight: #2a2f3d;
+}
+
+#shimmer-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: var(--shimmer-bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: 0;
+    transition: opacity 0.4s ease;
+    opacity: 1;
+    pointer-events: all;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+#shimmer-overlay.shimmer-hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Skeleton wrapper – matches content max-width */
+.shimmer-content {
+    width: 100%;
+    max-width: 650px;
+    padding: 16px 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 76px;
+}
+
+/* Skeleton header bar */
+.shimmer-header-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100000;
+    height: 60px;
+    background: var(--shimmer-bg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    box-sizing: border-box;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.shimmer-header-bar .sk-circle {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--shimmer-skeleton);
+    animation: shimmerPulse 1.6s infinite;
+}
+
+.shimmer-header-bar .sk-pill {
+    width: 44px;
+    height: 38px;
+    border-radius: 19px;
+    background: var(--shimmer-skeleton);
+    animation: shimmerPulse 1.6s infinite;
+    animation-delay: 0.15s;
+}
+
+/* Inferior nav skeleton */
+.shimmer-nav-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+}
+
+.shimmer-nav-row .sk-btn {
+    width: 130px;
+    height: 38px;
+    border-radius: 22px;
+    background: var(--shimmer-skeleton);
+    animation: shimmerPulse 1.6s infinite;
+    animation-delay: 0.25s;
+}
+
+.shimmer-nav-row .sk-btn:last-child {
+    animation-delay: 0.35s;
+}
+
+/* Large card skeleton */
+.sk-card {
+    width: 100%;
+    height: 160px;
+    border-radius: 16px;
+    background: var(--shimmer-skeleton);
+    animation: shimmerPulse 1.6s infinite;
+    animation-delay: 0.1s;
+}
+
+/* Feature lines */
+.sk-line-group {
+    background: var(--shimmer-skeleton);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    animation: shimmerPulse 1.6s infinite;
+    animation-delay: 0.2s;
+}
+
+.sk-line {
+    height: 16px;
+    border-radius: 8px;
+    background: var(--shimmer-highlight);
+    animation: shimmerPulse 1.6s infinite;
+}
+
+.sk-line.w75 { width: 75%; animation-delay: 0.3s; }
+.sk-line.w60 { width: 60%; animation-delay: 0.4s; }
+.sk-line.w85 { width: 85%; animation-delay: 0.5s; }
+.sk-line.w50 { width: 50%; animation-delay: 0.6s; }
+
+/* Warning box skeleton */
+.sk-warning {
+    width: 100%;
+    height: 52px;
+    border-radius: 0 12px 12px 0;
+    border-left: 4px solid var(--shimmer-highlight);
+    background: var(--shimmer-skeleton);
+    animation: shimmerPulse 1.6s infinite;
+    animation-delay: 0.45s;
+}
+
+/* CTA button skeleton */
+.sk-cta {
+    width: 100%;
+    height: 52px;
+    border-radius: 28px;
+    background: var(--shimmer-skeleton);
+    animation: shimmerPulse 1.6s infinite;
+    animation-delay: 0.55s;
+    margin-top: 4px;
+}
+
+/* Pulse animation – mimics shimmer */
+@keyframes shimmerPulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+/* Responsive shimmer */
+@media (max-width: 480px) {
+    .shimmer-content {
+        padding: 12px 14px;
+        gap: 12px;
+        margin-top: 68px;
+    }
+    .shimmer-header-bar {
+        height: 52px;
+        padding: 0 14px;
+    }
+    .shimmer-header-bar .sk-circle {
+        width: 32px;
+        height: 32px;
+    }
+    .shimmer-header-bar .sk-pill {
+        width: 36px;
+        height: 32px;
+        border-radius: 16px;
+    }
+    .shimmer-nav-row .sk-btn {
+        width: 105px;
+        height: 34px;
+        border-radius: 18px;
+    }
+    .sk-card {
+        height: 130px;
+    }
+    .sk-cta {
+        height: 44px;
+        border-radius: 24px;
     }
 }

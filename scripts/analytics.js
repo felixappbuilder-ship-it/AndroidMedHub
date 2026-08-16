@@ -1,4 +1,4 @@
-// frontend-user/scripts/analytics.js
+// scripts/analytics.js
 
 /**
  * Performance Analytics Module

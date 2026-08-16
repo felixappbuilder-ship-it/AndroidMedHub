@@ -1,19 +1,20 @@
-// frontend-user/scripts/sync.js
+// scripts/sync.js
 
 /**
  * Data Synchronization Module – Convex Integration
  * Handles silent two‑way sync between local IndexedDB and Convex backend.
  * All authenticated calls include the JWT token directly from localStorage.
- * 
+ *
  * Throttling: sync runs at most once per hour (or on demand via force).
  * Push & pull only happen after the 1‑hour cooldown, and then all pending data is exchanged.
- * 
+ *
  * Note: Conversations are synced in real‑time via the AI module, so they are excluded from this batch sync.
  */
 
 import * as utils from './utils.js';
 import * as db from './db.js';
-import * as app from './app.js';
+import * as auth from './auth.js';
+import * as subscription from './subscription.js';
 import { convexHttpClient } from './convex-client.js';
 
 // ==================== CONSTANTS ====================
@@ -114,10 +115,11 @@ function getAuthToken() {
 // ==================== LOCAL HELPER FOR SYNC QUEUE ====================
 
 async function addToSyncQueue(type, data, attempts = 0) {
+    const user = auth.getUser();
     const item = {
         type,
         data,
-        userId: app.getUser()?.id || 'anonymous',
+        userId: user?.id || user?._id || 'anonymous',
         timestamp: Date.now(),
         attempts: attempts
     };
@@ -155,7 +157,7 @@ export async function syncData(force = false) {
     console.log('[Sync] Starting full sync...');
 
     try {
-        const user = app.getUser();
+        const user = auth.getUser();
         if (!user) {
             console.warn('[Sync] No authenticated user');
             return;
@@ -659,7 +661,69 @@ async function processSubscriptionItem(data, token) {
     }
 }
 
-// ==================== LEGACY SYNC FUNCTIONS ====================
+// ==================== SYNC USER DATA (moved from app.js) ====================
+
+/**
+ * Fetch fresh user profile from backend and update local cache.
+ * @returns {Promise<boolean>} true if successful
+ */
+async function _syncUserProfile() {
+    const token = getAuthToken();
+    if (!token || !navigator.onLine) return false;
+    try {
+        const result = await convexHttpClient.query("users/queries:getProfile", { token });
+        if (result && result.success && result.data && result.data.user) {
+            const freshUser = result.data.user;
+            console.log('[Sync] Fetched user profile from backend:', freshUser);
+            await auth.setUser(freshUser);
+            return true;
+        } else if (result && !result.success) {
+            console.warn('[Sync] Profile sync failed:', result.message);
+        }
+    } catch (err) {
+        console.warn('[Sync] Could not sync user profile', err);
+    }
+    return false;
+}
+
+/**
+ * Fetch fresh subscription status from backend and update local cache.
+ * @returns {Promise<boolean>} true if successful
+ */
+async function _syncSubscriptionStatus() {
+    const token = getAuthToken();
+    if (!token || !navigator.onLine) return false;
+    try {
+        const freshSub = await subscription.getSubscriptionStatus(true);
+        if (freshSub) {
+            await subscription.setSubscription(freshSub);
+            return true;
+        }
+    } catch (err) {
+        console.warn('[Sync] Could not sync subscription status', err);
+    }
+    return false;
+}
+
+/**
+ * Sync all user data from backend (profile + subscription).
+ * Call after login/register or periodically.
+ */
+export async function syncUserData() {
+    console.log('[Sync] Syncing user data from backend...');
+    await Promise.all([_syncUserProfile(), _syncSubscriptionStatus()]);
+}
+
+/**
+ * Perform a full sync of all data (exam results, notes, conversations, etc.)
+ * using the sync module. This is the main sync function for all data types.
+ */
+export async function triggerFullSync() {
+    console.log('[Sync] Triggering full sync...');
+    await syncData(); // existing syncData function
+}
+
+// ==================== LEGACY SYNC FUNCTIONS (already exported) ====================
 
 export async function syncExamResults(result) {
     if (!result) {
@@ -669,7 +733,7 @@ export async function syncExamResults(result) {
 
     if (onlineStatus) {
         try {
-            const user = app.getUser();
+            const user = auth.getUser();
             const token = getAuthToken();
             if (!token) return;
             await pushExamResults(user, token);
@@ -801,5 +865,8 @@ window.sync = {
     getPendingSyncs,
     triggerBackgroundSync,
     pushSingleNote,
-    resetSyncTimer
+    resetSyncTimer,
+    // ✅ NEW EXPORTS
+    syncUserData,
+    triggerFullSync
 };
