@@ -519,5 +519,3 @@ export const pollPaymentStatus = Payment.pollPaymentStatus.bind(Payment);
 
 // Expose Payment globally for window usage
 window.Payment = Payment;
-
-// No duplicate export list – all functions are already exported individually.

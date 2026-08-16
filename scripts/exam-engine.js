@@ -513,7 +513,6 @@ export async function endExam() {
     try {
         const user = auth.getUser();
         if (user && user._id) {
-            // ✅ New signature: pass exam results and user object directly
             const prResult = await performanceRating.computeFullPerformance(
                 results,                         // exam data
                 user,                            // user object
@@ -521,7 +520,6 @@ export async function endExam() {
                 examState.opponentRating || 100
             );
 
-            // Merge performance rating data into results
             results.performanceRatio = prResult.pr;
             results.factors = prResult.factors;
             results.previousRating = prResult.previousRating;
@@ -534,25 +532,19 @@ export async function endExam() {
             results.integrity = prResult.integrity;
             results.historyCount = prResult.historyCount;
 
-            // Update user's rating and history in IndexedDB and app state
             user.rating = prResult.newRating;
             user.rank = prResult.rank.rank;
             user.historyEWMA = prResult.historyEWMA;
             user.completedExams = (user.completedExams || 0) + 1;
             user.lastExamPR = prResult.pr;
             await db.saveUser(user);
-            // We don't need to call app.setUser() because we're in a core module;
-            // the auth module will handle user state updates.
         }
     } catch (err) {
         console.warn('Performance Rating computation failed:', err);
-        // Continue without rating – exam results are still valid
     }
 
-    // Save to database
     await db.saveExamResult(results);
 
-    // Record seen questions for repetition prevention (except Challenge mode)
     if (examState.config.mode !== 'challenge') {
         const questionIds = results.questions.map(q => q.id);
         const byTopic = {};
@@ -617,6 +609,28 @@ export function clearExamConfig() {
     sessionStorage.removeItem('examConfig');
 }
 
+/**
+ * Clear the entire exam state (for logout, reset, etc.)
+ */
+export function clearExamState() {
+    examState.config = null;
+    examState.questions = [];
+    examState.answers = [];
+    examState.currentIndex = 0;
+    examState.startTime = null;
+    examState.isFinished = false;
+    examState.examId = null;
+    examState.submittedQuestions = [];
+    examState.showExplanation = [];
+    examState.seed = null;
+    examState.cycle = 1;
+    examState.challengeId = null;
+    examState.challengeCode = null;
+    examState.opponent = null;
+    examState.lobbyAvgPR = null;
+    examState.opponentRating = null;
+}
+
 // ==================== Export ====================
 
 // Live proxy for backward compatibility with `import { config } from ...`
@@ -671,5 +685,7 @@ export const examEngine = {
     // ✅ Added exam config functions
     setExamConfig,
     getExamConfig,
-    clearExamConfig
+    clearExamConfig,
+    // ✅ Added clearExamState
+    clearExamState
 };

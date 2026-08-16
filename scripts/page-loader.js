@@ -1,11 +1,8 @@
 // scripts/page-loader.js
 
-/**
- * Loads and parses a page HTML file, extracting metadata and the root <section>.
- * @param {string} pageName - The page name (e.g., 'dashboard', 'exam')
- * @returns {Promise<Object>} Page descriptor with metadata and HTML.
- * @throws {Error} If the page cannot be fetched or is invalid.
- */
+// Eagerly import all page scripts – forces Vite to bundle them all
+const pageModules = import.meta.glob('./pages/*.js', { eager: true });
+
 export async function loadPage(pageName) {
     const url = `/pages/${pageName}.html`;
     const response = await fetch(url);
@@ -24,7 +21,7 @@ export async function loadPage(pageName) {
     const metadata = {
         page: section.dataset.page || pageName,
         script: section.dataset.script || `/scripts/pages/${pageName}.js`,
-        style: section.dataset.style || `/css/${pageName}.css`,   // ✅ fixed template literal
+        style: section.dataset.style || `/css/${pageName}.css`,
         title: section.dataset.title || pageName,
         auth: section.dataset.auth || 'none',
         cache: section.dataset.cache === 'true',
@@ -38,5 +35,13 @@ export async function loadPage(pageName) {
         throw new Error(`Page "${pageName}" has no data-script attribute.`);
     }
 
-    return metadata;
+    // Look up the eagerly imported module
+    const relativePath = `./pages/${pageName}.js`;
+    const module = pageModules[relativePath];
+
+    if (!module) {
+        throw new Error(`Page script not found for: ${pageName}`);
+    }
+
+    return { ...metadata, module };
 }

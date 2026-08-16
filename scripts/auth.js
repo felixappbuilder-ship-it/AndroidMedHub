@@ -15,6 +15,7 @@ import * as sync from './sync.js';
 import * as subscription from './subscription.js';
 import * as examEngine from './exam-engine.js';
 import { convexHttpClient } from './convex-client.js';
+import { navigateTo } from './router.js';  // ← for clean navigation
 
 // ==================== TOKEN MANAGEMENT ====================
 
@@ -25,7 +26,6 @@ export function getToken() {
 export function setToken(token) {
     if (token) {
         utils.setLocalStorage('accessToken', token);
-        // notifications polling is handled elsewhere
     } else {
         utils.removeLocalStorage('accessToken');
         utils.removeLocalStorage('refreshToken');
@@ -64,8 +64,6 @@ export async function setUser(user) {
     }
     utils.setLocalStorage('user', user);
     console.log('[Auth] User set and saved to both storages');
-
-    // Notification polling is triggered by notifications module
 }
 
 export async function initUser() {
@@ -111,7 +109,6 @@ export async function clearUser() {
     }
     utils.removeLocalStorage('user');
     clearToken();
-    // Stop notification polling is handled elsewhere
 }
 
 export function checkAuth() {
@@ -129,7 +126,7 @@ function requireOnline() {
     }
 }
 
-// ==================== HELPER: GET USER-FRIENDLY ERROR ====================
+// ==================== ERROR HELPERS ====================
 
 function getErrorMessage(error) {
     if (error.data?.message) return error.data.message;
@@ -400,9 +397,9 @@ export async function resetPassword(identifier, newPassword) {
         }
         sessionStorage.removeItem('resetToken');
         ui.showToast('Password reset successfully. Please login.', 'success');
+        // ✅ Clean SPA redirect
         setTimeout(() => {
-            // Use router.navigateTo? For now keep, but we can import router later
-            window.location.href = '/pages/login.html';
+            navigateTo('login');
         }, 2000);
     } catch (error) {
         console.error('[Auth] Reset password failed', error);
@@ -642,7 +639,7 @@ window.auth = {
     getDevices,
     logoutDevice,
     logoutAllDevices,
-    // Additional exports used by app.js
+    // Additional exports used by app.js and other modules
     setToken,
     clearToken,
     getUser,

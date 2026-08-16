@@ -107,6 +107,7 @@ export function showToast(message, type = 'info', duration = 3000) {
 
 // ==================== MODAL DIALOGS ====================
 
+// Shared modal overlay for both confirmation and generic modals
 let modalOverlay = null;
 
 function ensureModalOverlay() {
@@ -114,13 +115,33 @@ function ensureModalOverlay() {
         modalOverlay = document.createElement('div');
         modalOverlay.className = 'modal-overlay';
         modalOverlay.style.display = 'none';
+        modalOverlay.style.alignItems = 'center';
+        modalOverlay.style.justifyContent = 'center';
+        modalOverlay.style.position = 'fixed';
+        modalOverlay.style.inset = '0';
+        modalOverlay.style.zIndex = '1000';
+        modalOverlay.style.backgroundColor = 'rgba(0,0,0,0.5)';
+        modalOverlay.style.backdropFilter = 'blur(4px)';
         document.body.appendChild(modalOverlay);
+
+        // Click outside to close (for generic modals only)
+        modalOverlay.addEventListener('click', (e) => {
+            if (e.target === modalOverlay) {
+                // Only close if it's a generic modal (not a confirmation)
+                if (!modalOverlay.dataset.isConfirmation) {
+                    hideModal();
+                }
+            }
+        });
     }
 }
+
+// ==================== CONFIRMATION DIALOG ====================
 
 export function showConfirmationDialog(title, message, type = 'info') {
     return new Promise((resolve) => {
         ensureModalOverlay();
+        modalOverlay.dataset.isConfirmation = 'true';
 
         const modal = document.createElement('div');
         modal.className = 'modal';
@@ -145,6 +166,7 @@ export function showConfirmationDialog(title, message, type = 'info') {
         const closeModal = (result) => {
             modalOverlay.style.display = 'none';
             modalOverlay.innerHTML = '';
+            delete modalOverlay.dataset.isConfirmation;
             resolve(result);
         };
 
@@ -158,10 +180,66 @@ export function showConfirmationDialog(title, message, type = 'info') {
     });
 }
 
+// ==================== GENERIC MODAL ====================
+
+/**
+ * Show a generic modal with arbitrary HTML content.
+ * @param {Object} options - { title, content, size?, onClose? }
+ */
+export function showModal(options) {
+    ensureModalOverlay();
+    // Remove confirmation flag so click-outside works
+    delete modalOverlay.dataset.isConfirmation;
+
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.cssText = `
+        background: var(--bg-card);
+        border-radius: var(--radius-lg);
+        padding: 1.5rem;
+        max-width: ${options.size === 'medium' ? '480px' : '400px'};
+        width: 90%;
+        max-height: 90vh;
+        overflow-y: auto;
+        box-shadow: var(--shadow-lg);
+        animation: modalSlideUp 0.25s ease;
+    `;
+
+    modal.innerHTML = `
+        <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+            <h3 style="margin:0;">${options.title || ''}</h3>
+            <button class="modal-close" style="background:none; border:none; font-size:1.5rem; cursor:pointer; color:var(--text-muted);">×</button>
+        </div>
+        <div class="modal-body" style="color:var(--text-secondary);">${options.content || ''}</div>
+    `;
+
+    modalOverlay.innerHTML = '';
+    modalOverlay.appendChild(modal);
+    modalOverlay.style.display = 'flex';
+
+    // Close button
+    modal.querySelector('.modal-close').addEventListener('click', () => {
+        hideModal();
+        if (options.onClose) options.onClose();
+    });
+
+    // Click outside to close (generic modal)
+    modalOverlay.addEventListener('click', (e) => {
+        if (e.target === modalOverlay) {
+            hideModal();
+            if (options.onClose) options.onClose();
+        }
+    });
+}
+
+/**
+ * Hide the currently open modal (both confirmation and generic).
+ */
 export function hideModal() {
     if (modalOverlay) {
         modalOverlay.style.display = 'none';
         modalOverlay.innerHTML = '';
+        delete modalOverlay.dataset.isConfirmation;
     }
 }
 
@@ -425,6 +503,7 @@ window.ui = {
     hideLoading,
     showConfirmationDialog,
     hideModal,
+    showModal,           // ✅ Added
     toggleTheme,
     applyTheme,
     getTheme,

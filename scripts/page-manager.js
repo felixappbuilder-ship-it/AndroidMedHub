@@ -3,12 +3,12 @@
 import { loadPage } from './page-loader.js';
 import * as auth from './auth.js';
 import * as ui from './ui.js';
-import * as router from './router.js'; // ✅ added for clean navigation
+import * as router from './router.js';
 
 // State
-let currentPage = null;               // { name, root, cleanup, scriptPath }
+let currentPage = null;               // { name, root, cleanup, module, scriptPath }
 let abortController = null;
-let cleanupFunctions = [];            // array of cleanup callbacks from page init
+let cleanupFunctions = [];
 
 /**
  * Navigate to a new page.
@@ -28,10 +28,10 @@ export async function navigateTo(pageName, params = {}, query = new URLSearchPar
     const signal = abortController.signal;
 
     try {
-        // 3. Load the page HTML and metadata
+        // 3. Load the page HTML and metadata, and get the pre-imported module
         const pageMeta = await loadPage(pageName);
 
-        // 4. Authentication check – use auth.checkAuth() and clean redirect
+        // 4. Authentication check
         if (pageMeta.auth === 'required') {
             if (!auth.checkAuth()) {
                 const returnTo = encodeURIComponent(pageName);
@@ -56,12 +56,12 @@ export async function navigateTo(pageName, params = {}, query = new URLSearchPar
         // 7. Set the page title
         document.title = pageMeta.title || 'MedHub';
 
-        // 8. Dynamically import the page's JavaScript module
-        const module = await import(pageMeta.script);
+        // 8. Use the already imported module from pageMeta
+        const module = pageMeta.module;
 
         // 9. Prepare the context object for the page
         const context = {
-            root: appRoot.querySelector('section[data-page]'), // the actual DOM node in the app-root
+            root: appRoot.querySelector('section[data-page]'),
             page: pageName,
             path: `/${pageName}`,
             query: query,
@@ -83,11 +83,12 @@ export async function navigateTo(pageName, params = {}, query = new URLSearchPar
             }
         }
 
-        // 11. Store the current page state
+        // 11. Store the current page state, including the module
         currentPage = {
             name: pageName,
             root: context.root,
             cleanup: cleanupFunctions,
+            module: module,
             scriptPath: pageMeta.script,
         };
 
@@ -125,14 +126,13 @@ async function destroyCurrentPage() {
     currentPage = null;
     cleanupFunctions = [];
 
-    // 1. Call the page's destroy function if exported
-    try {
-        const module = await import(page.scriptPath);
-        if (typeof module.destroy === 'function') {
-            await module.destroy();
+    // 1. Call the page's destroy function using the stored module
+    if (page.module && typeof page.module.destroy === 'function') {
+        try {
+            await page.module.destroy();
+        } catch (e) {
+            console.warn('[PageManager] Destroy error:', e);
         }
-    } catch (e) {
-        console.warn('[PageManager] Destroy error:', e);
     }
 
     // 2. Execute any cleanup functions returned by init()

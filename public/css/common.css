@@ -388,3 +388,7 @@ small, .small {
 .mb-2 { margin-bottom: 1rem; }
 .p-1 { padding: 0.5rem; }
 .p-2 { padding: 1rem; }
+@keyframes modalSlideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
