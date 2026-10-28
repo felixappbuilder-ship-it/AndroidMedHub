@@ -6,40 +6,29 @@
  * This module wraps window.MedVixNotifications (the JS bridge exposed
  * by MainActivity.addJavascriptInterface). It is NOT the in-app
  * notification center — that lives in ./notifications.js (plural),
- * which reads from the Convex backend. This module handles:
+ * which reads from the Convex backend.
  *
- *   • Local notifications (schedule, cancel, immediate show)
- *   • POST_NOTIFICATIONS permission flow
- *   • Notification-tap navigation (cold start + warm start)
- *   • FCM token retrieval + sync to Convex
+ * ─── IMPORT STRATEGY (READ THIS) ────────────────────────────────
  *
- * Directory note:
+ * Only `utils` is imported eagerly. `auth`, `security`, and
+ * `convex-client` are LAZY-imported inside the two async functions
+ * that need them (syncFcmToBackend, unregisterFromBackend).
  *
- *   scripts/notifications.js   ← in-app notification center (existing)
- *   scripts/notification/*.js  ← native bridge + scheduling helpers
+ * WHY: Rollup's production bundler concatenates the module graph.
+ * If this file imports auth/security/convex-client at the top level,
+ * Rollup places those modules earlier in the bundle. That reorders a
+ * pre-existing circular dependency in sync.js → auth.js → … and
+ * produces a "Cannot access X before initialization" TDZ error that
+ * never shows up in dev mode (Vite serves each module separately).
  *
- * Design:
+ * Making these lazy breaks the top-level module graph edge.
+ * Same behaviour, zero TDZ risk, no change to any other file.
  *
- *   • Callbacks installed at import time. Native code calls
- *     window.MedVixNotificationCallbacks.onFcmToken(token) and
- *     .onPermissionResult(granted) via evaluateJavascript. If those
- *     don't exist yet, the result is lost. Installing at import time
- *     guarantees the surface exists before any native call lands.
- *
- *   • FCM tokens buffer until init(). Firebase may deliver the token
- *     before init() runs (which happens after the router mounts).
- *     Buffered tokens are delivered inside init().
- *
- *   • init() is idempotent and safe to call on every boot.
- *
- *   • All methods safe to call on web / without native bridge — they
- *     return safe defaults rather than throwing.
+ * Do NOT add top-level imports of anything that imports sync.js or
+ * auth.js. If you need another module here, ask first.
  */
 
 import * as utils from '../utils.js';
-import * as auth from '../auth.js';
-import * as security from '../security.js';
-import { convexHttpClient } from '../convex-client.js';
 
 const BRIDGE_NAME    = 'MedVixNotifications';
 const CALLBACKS_NAME = 'MedVixNotificationCallbacks';
@@ -50,19 +39,6 @@ const FCM_LOCAL_KEY  = 'fcmToken';
 // onFcmToken callback and a very fast login both fire before either
 // resolves), the second shares the first's promise instead of firing
 // a second mutation. Reset once the promise settles.
-//
-// No cooldown on purpose. The two call paths are for fundamentally
-// different situations:
-//
-//   • native.js         — automatic (boot, token rotation, login)
-//   • notifications.js  — user tap on the bell
-//
-// Duplicate mutations are idempotent on the backend
-// (push/mutations:registerDevice upserts by deviceId), so a
-// duplicate costs one extra audit log line and nothing else.
-// A cooldown was tried and removed — it made the user-tap path
-// require a `force` flag and left a window where a legitimate
-// token rotation could be skipped.
 let _syncInFlight  = null;    // { token, promise } | null
 let _unregInFlight = null;    // Promise | null
 
@@ -73,7 +49,7 @@ let _initialized   = false;
 let _onNavigate    = null;
 let _onFcmToken    = null;
 let _pendingToken  = null;
-let _permResolver  = null; // one-shot resolver for requestPermission()
+let _permResolver  = null;
 
 // ---------------------------------------------------------------
 // Callback surface — installed synchronously at import time
@@ -149,7 +125,6 @@ export function requestPermission() {
     try { b.requestPermission(); }
     catch (e) { console.error('[NativeNotify] requestPermission threw', e); settle(false); }
 
-    // Failsafe — never leave the promise hanging
     setTimeout(() => settle(false), 30000);
   });
 }
@@ -203,15 +178,6 @@ export function consumePendingRoute() {
   try { return String(b.consumePendingRoute() || ''); } catch { return ''; }
 }
 
-/**
- * Initialize the module. Call ONCE after the router is ready.
- *
- * @param {object}   options
- * @param {function} [options.onNavigate]  function(routePath) — called
- *     for a cold-start pending route and for every warm-start tap event.
- * @param {function} [options.onFcmToken]  function(token) — called
- *     whenever the token is issued, refreshed, or delivered from cache.
- */
 export function init(options = {}) {
   if (_initialized) return;
   _initialized = true;
@@ -219,7 +185,6 @@ export function init(options = {}) {
   _onNavigate = typeof options.onNavigate === 'function' ? options.onNavigate : null;
   _onFcmToken = typeof options.onFcmToken === 'function' ? options.onFcmToken : null;
 
-  // Drain cold-start route (set by MainActivity PATCH A)
   if (_onNavigate) {
     const route = consumePendingRoute();
     if (route) {
@@ -228,7 +193,6 @@ export function init(options = {}) {
     }
   }
 
-  // Warm-start tap (dispatched by MainActivity PATCH C)
   if (typeof window !== 'undefined') {
     window.addEventListener('medvix:notification-tapped', () => {
       if (!_onNavigate) return;
@@ -240,7 +204,6 @@ export function init(options = {}) {
     });
   }
 
-  // Deliver FCM token
   if (_onFcmToken) {
     if (_pendingToken) {
       const t = _pendingToken;
@@ -260,48 +223,10 @@ export function init(options = {}) {
 // ---------------------------------------------------------------
 // FCM token ↔ Convex sync
 // ---------------------------------------------------------------
+//
+// auth, security, and convex-client are LAZY-imported here.
+// See file-header comment. Do not move them to the top.
 
-/**
- * Register this device's FCM token with the Convex backend.
- *
- * Persists the token to localStorage regardless of auth state (so
- * it survives reloads and is available when the user logs in).
- *
- * Only sends the Convex mutation when the user is authenticated —
- * on anonymous sessions it just caches locally.
- *
- * ─── GUARDS ────────────────────────────────────────────────────
- *
- *   1. Opt-out: if the user explicitly disabled push via the
- *      notifications page (localStorage['medvix.notification.pushEnabled']
- *      === 'false'), return false without calling the mutation.
- *      Without this, the boot-time token sync would flip
- *      pushEnabled back to true on the backend on every cold start,
- *      silently re-enabling push after the user turned it off.
- *
- *   2. In-flight dedup: if another syncFcmToBackend call with the
- *      same token is already awaiting the mutation, return that
- *      promise instead of firing a second mutation. Covers the
- *      boot + login same-tick case.
- *
- * No cooldown. Duplicate mutations are idempotent on the backend
- * (registerDevice upserts by deviceId), so a duplicate costs one
- * extra audit log line and nothing else. The two call paths (native
- * automatic + notifications-page user tap) are genuinely different
- * situations — a cooldown would either block user intent or be
- * irrelevant, depending on which path fired.
- *
- * `force = true` bypasses the opt-out guard. Used by
- * notifications.js:setPushEnabled(true) when the user explicitly
- * taps the bell to opt back in — without it, the opt-out guard
- * would silently refuse the request.
- *
- * @param {string}  [explicitToken]  — bypass getCachedToken() when the
- *     caller already has the token (e.g. from an onFcmToken callback).
- * @param {boolean} [force=false]    — bypass the opt-out guard. Only
- *     set when the user is explicitly opting back in.
- * @returns {Promise<boolean>}       — true iff the backend confirms the token.
- */
 export async function syncFcmToBackend(explicitToken, force = false) {
   const token =
     explicitToken ||
@@ -310,15 +235,15 @@ export async function syncFcmToBackend(explicitToken, force = false) {
 
   if (!token) return false;
 
-  // Always persist locally — even if not authenticated yet
   utils.setLocalStorage(FCM_LOCAL_KEY, token);
 
+  // Lazy imports — break the cycle that causes TDZ in prod builds
+  const auth = await import('../auth.js');
   if (!auth.checkAuth || !auth.checkAuth()) return false;
   const authToken = auth.getToken?.();
   if (!authToken) return false;
 
   // ── Guard 1: opt-out ────────────────────────────────────────
-  // Skipped when force=true (user is explicitly opting back in).
   if (!force) {
     const local = utils.getLocalStorage('medvix.notification.pushEnabled', null);
     if (local === 'false' || local === false) {
@@ -331,11 +256,12 @@ export async function syncFcmToBackend(explicitToken, force = false) {
     return _syncInFlight.promise;
   }
 
-  // ── Actual mutation ─────────────────────────────────────────
+  const security = await import('../security.js');
+  const { convexHttpClient } = await import('../convex-client.js');
+
   const promise = (async () => {
     try {
       const deviceId = await security.getDeviceId();
-      // Server function is action → use .action()
       const result = await convexHttpClient.action('push/mutations:registerDevice', {
         token: authToken,
         fcmToken: token,
@@ -362,14 +288,8 @@ export async function syncFcmToBackend(explicitToken, force = false) {
   return promise;
 }
 
-/**
- * Deactivate this device's push registration. Call on logout so the
- * backend stops sending pushes to a logged-out install.
- *
- * Deduped against concurrent calls (rare — user double-tapping
- * logout) so two mutations don't land from one intent.
- */
 export async function unregisterFromBackend() {
+  const auth = await import('../auth.js');
   if (!auth.checkAuth || !auth.checkAuth()) return false;
   const authToken = auth.getToken?.();
   if (!authToken) return false;
@@ -378,10 +298,12 @@ export async function unregisterFromBackend() {
     return _unregInFlight;
   }
 
+  const security = await import('../security.js');
+  const { convexHttpClient } = await import('../convex-client.js');
+
   const promise = (async () => {
     try {
       const deviceId = await security.getDeviceId();
-      // Server function is action → use .action()
       await convexHttpClient.action('push/mutations:deactivateDevice', {
         token: authToken,
         deviceId,

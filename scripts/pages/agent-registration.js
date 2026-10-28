@@ -4,7 +4,6 @@ import * as ui from '../ui.js';
 import * as router from '../router.js';
 import * as redirect from '../redirect.js';
 import * as validation from '../validation.js';
-import * as security from '../security.js';
 import * as utils from '../utils.js';
 import * as referral from '../referral.js';
 import { convexHttpClient } from '../convex-client.js';
@@ -694,15 +693,12 @@ async function handleLogin(e) {
 
   ui.showLoading('Logging in...');
   try {
-    const deviceFingerprint = security.generateDeviceFingerprint();
-    const deviceInfo = {
-      platform: navigator.platform,
-      userAgent: navigator.userAgent,
-      screen: `${screen.width}x${screen.height}`,
-      timezone: new Date().getTimezoneOffset()
-    };
-
-    const user = await auth.login(email, password, { deviceFingerprint, deviceInfo });
+    // auth.login builds device identity internally via
+    // security.buildDeviceIdentity() — no device args needed here.
+    // Previously this block called security.generateDeviceFingerprint(),
+    // which doesn't exist on security.js, so every login on this page
+    // threw a TypeError before the network call even started.
+    const user = await auth.login(email, password);
 
     if (remember) utils.setLocalStorage('rememberedEmail', email);
     else utils.removeLocalStorage('rememberedEmail');
@@ -797,22 +793,18 @@ async function handleRegistration() {
 
   ui.showLoading('Creating agent account...');
   try {
-    const deviceFingerprint = security.generateDeviceFingerprint();
-    const deviceInfo = {
-      platform: navigator.platform,
-      userAgent: navigator.userAgent,
-      screen: `${screen.width}x${screen.height}`,
-      timezone: new Date().getTimezoneOffset()
-    };
-
+    // auth.register builds device identity internally via
+    // security.buildDeviceIdentity(). The deviceFingerprint and
+    // deviceInfo arguments that used to be passed here were always
+    // ignored by auth.register — and the call that produced them
+    // (security.generateDeviceFingerprint) threw a TypeError before
+    // registration could start. Fixed by removing both.
     await auth.register({
       name: registrationData.name,
       email: registrationData.email,
       phone: registrationData.phone,
       password: registrationData.password,
       securityQuestions: registrationData.securityQuestions,
-      deviceFingerprint,
-      deviceInfo,
       referralCode: registrationData.referral || undefined,
       isAgent: true,
       agentVerified: false
