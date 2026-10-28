@@ -19,6 +19,16 @@ import * as redirect from './redirect.js';
 import * as updates from './updates.js';
 import * as events from './events.js';
 
+// === NATIVE NOTIFICATIONS ===
+// native.js   — bridge wrapper for window.MedVixNotifications (Android)
+// planner.js  — planner → native reminder scheduler (exams, timetable)
+//
+// These are NOT the in-app notification center. That's ./notifications.js
+// above, which reads from the Convex backend. This pair handles native
+// Android notifications only.
+import * as nativeNotifications from './notification/native.js';
+import * as plannerNotifications from './notification/planner.js';
+
 // === GOOGLE PLAY IN-APP UPDATE ===
 import * as appUpdate from './app-update.js';
 
@@ -52,6 +62,7 @@ function importCapacitor() {
         'MedvixApp:',         !!MedvixApp,
         'MedvixOrientation:', !!MedvixOrientation,
         'MedVixStorage:',     !!window.MedVixStorage,
+        'MedVixNotifications:', !!window.MedVixNotifications,
     );
 }
 
@@ -1302,6 +1313,32 @@ async function bootstrap() {
         }
 
         redirectTarget = resolveInitialRoute();
+
+        // ── Cold-start notification tap override ─────────────────────
+        //
+        // If the app was cold-launched by a notification tap, MainActivity
+        // PATCH A stored the destination in SharedPreferences before the
+        // WebView parsed. Drain it now — BEFORE history.replaceState and
+        // initRouter — so the notification destination wins over whatever
+        // resolveInitialRoute() picked (usually welcome or subjects).
+        //
+        // If the route page requires auth, its init() will redirect to
+        // login, and redirect.navigateWithReturn will bring the user back
+        // here after login.
+        //
+        // consumePendingRoute() is one-shot: the route is removed from
+        // storage, so the later nativeNotifications.init() call below
+        // won't re-navigate and cause a loop.
+        try {
+            const notifRoute = nativeNotifications.consumePendingRoute();
+            if (notifRoute) {
+                redirectTarget = String(notifRoute).replace(/^\//, '');
+                console.log('[App] Cold-start notification tap →', redirectTarget);
+            }
+        } catch (e) {
+            console.warn('[App] Could not drain notification route:', e);
+        }
+
         console.log('[App] Initial route:', redirectTarget,
                     '| authed:', appAuthenticated,
                     '| fileLaunch:', fileLaunchPending,
@@ -1316,6 +1353,54 @@ async function bootstrap() {
 
         initRouter();
         drainEarlyQueue();
+
+        // ── Native notifications: wire warm-start + FCM token ─────────
+        //
+        // init() is idempotent. It:
+        //   1. Installs the warm-start 'medvix:notification-tapped'
+        //      listener (MainActivity PATCH C dispatches this on every
+        //      notification tap that lands while the app is already
+        //      running).
+        //   2. Flushes any FCM token that arrived before this line.
+        //
+        // The cold-start route was drained above and is already applied.
+        // The drain inside init() will find nothing (one-shot).
+        try {
+            nativeNotifications.init({
+                onNavigate: (route) => {
+                    const clean = String(route).replace(/^\//, '') || 'performance';
+                    console.log('[App] Notification tap →', clean);
+                    try { navigateTo(clean); }
+                    catch (e) { console.warn('[App] navigateTo failed:', e); }
+                },
+                onFcmToken: (token) => {
+                    // Persist locally so it survives reloads and is
+                    // available on next login
+                    utils.setLocalStorage('fcmToken', token);
+                    // Sync to Convex if already authenticated
+                    nativeNotifications.syncFcmToBackend(token).catch((e) => {
+                        console.debug?.('[App] FCM sync failed:', e?.message || e);
+                    });
+                },
+            });
+        } catch (e) {
+            console.warn('[App] Native notification init failed:', e);
+        }
+
+        // ── Planner reminders: reconcile native schedule ──────────────
+        //
+        // Runs once per cold start. Picks up exams/sessions added on
+        // another device (synced via Convex → IndexedDB → localStorage)
+        // and cancels any reminders whose source data was deleted.
+        //
+        // Cheap (< 5 ms, pure local JS). No permission prompts, no
+        // user-visible UI. Silently skips if the bridge is unavailable
+        // (web, iOS pending).
+        try {
+            plannerNotifications.syncNativeReminders();
+        } catch (e) {
+            console.warn('[App] Planner reminder sync failed:', e);
+        }
 
         deferredDeepLinkPromise.then((url) => {
             if (!url) return;
@@ -1458,6 +1543,13 @@ window.app = {
 
     lockSplashOrientation,
     releaseSplashOrientation,
+
+    // ── Native notifications (bridge + planner) ────────────────
+    // DevTools / QA access. Mirrors the window.nativeNotifications
+    // and window.plannerNotifications globals installed by the
+    // modules themselves.
+    nativeNotifications,
+    plannerNotifications,
 
     // First-launch helpers (useful for QA / devtools)
     isFirstLaunch,

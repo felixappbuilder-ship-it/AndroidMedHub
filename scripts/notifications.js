@@ -43,6 +43,27 @@ const NOTIFICATION_COOLDOWN_MS = 3 * 60 * 1000; // 3 hours
 const NOTIFICATION_TIMER_KEY = 'notification_timer';
 const POLL_INTERVAL_MS = 30000; // 30 seconds
 
+// Persisted offline queue for read receipts — array of { id, at }.
+// Populated when the backend call fails (offline or transient error),
+// drained on the next online event or app boot.
+const PENDING_READS_KEY = 'medvix.notification.pendingReads';
+
+// Local push-enabled state for this device. Defaults to true (matches
+// the backend default: every device that logs in has pushEnabled=true).
+// Written to false when the user taps the opt-out bell. Cleared on
+// logout (see auth.js) so a fresh login starts with push on.
+const PUSH_ENABLED_KEY = 'medvix.notification.pushEnabled';
+
+// Ids of cards the user has expanded this session. Preserved across
+// re-renders so expanding a card (which marks it read and triggers a
+// re-render) doesn't collapse it back.
+const expandedIds = new Set();
+
+// One-time delegation guard — prevents stacking click listeners on
+// every render() call. Tracked by element reference so a page swap
+// (new container) re-attaches.
+let _delegationEl = null;
+
 // ==================== ACTION REGISTRY ====================
 // Custom actions can be registered here: actionHandlers['myAction'] = (element, notif) => {...}
 const actionHandlers = {};
@@ -461,17 +482,23 @@ export function render() {
         container.appendChild(groupDiv);
     }
 
-    // Event delegation for all action buttons
-    container.addEventListener('click', (e) => {
-        const actionEl = e.target.closest('[data-action]');
-        if (!actionEl) return;
+    // Event delegation for backend-provided action buttons
+    // ([data-action] inside the HTML body). Attached once per
+    // container element — render() runs on every markRead and must
+    // not stack handlers.
+    if (container && _delegationEl !== container) {
+        _delegationEl = container;
+        container.addEventListener('click', (e) => {
+            const actionEl = e.target.closest('[data-action]');
+            if (!actionEl) return;
 
-        const notifCard = e.target.closest('.notif-card');
-        const notifId = notifCard?.dataset.id;
-        const notif = notifications.find(n => n.id === notifId);
+            const notifCard = e.target.closest('.notif-card');
+            const notifId = notifCard?.dataset.id;
+            const notif = notifications.find((n) => n.id === notifId);
 
-        processAction(actionEl, notif);
-    });
+            processAction(actionEl, notif);
+        });
+    }
 }
 
 function groupNotifications(items) {
@@ -499,31 +526,11 @@ function groupNotifications(items) {
 function createCard(notif) {
     const template = document.getElementById('notificationCardTemplate');
     if (!template) {
-        // Fallback if template missing – render raw HTML
-        const div = document.createElement('div');
-        div.className = 'notif-card';
-        div.dataset.id = notif.id;
-        // Add type class for styling (still used by CSS for icon/colour hints)
-        div.classList.add(`type-${notif.category}`);
-        const bodyContent = notif.body || '';
-        if (bodyContent.trim().startsWith('<')) {
-            div.innerHTML = bodyContent;
-        } else {
-            div.innerHTML = `
-                <div class="card-header">
-                    <div class="card-icon">${notif.icon || '📩'}</div>
-                    <div class="card-title-area">
-                        <div class="card-title">${notif.title || 'Notification'}</div>
-                        <div class="card-subtitle">${notif.subtitle || ''}</div>
-                    </div>
-                </div>
-                <div class="card-body">${bodyContent}</div>
-                <div class="card-footer">
-                    <span class="card-time">${utils.formatDate(notif.timestamp, 'full')}</span>
-                </div>
-            `;
-        }
-        return div;
+        console.warn('[Notifications] notificationCardTemplate missing — cannot render card');
+        const fallback = document.createElement('div');
+        fallback.className = 'notif-card';
+        fallback.textContent = notif.title || 'Notification';
+        return fallback;
     }
 
     const card = template.content.cloneNode(true).firstElementChild;
@@ -543,30 +550,34 @@ function createCard(notif) {
     const subtitleEl = card.querySelector('.card-subtitle');
     if (subtitleEl) subtitleEl.textContent = notif.subtitle || '';
 
-    // Body – use innerHTML if body contains HTML, else textContent
+    // ── Body: always render full content; visibility handled by CSS ──
     const body = card.querySelector('.card-body');
     if (body) {
         const rawBody = notif.body || '';
         if (rawBody.trim().startsWith('<')) {
-            body.innerHTML = rawBody; // Unstyled HTML – CSS will style it
+            body.innerHTML = rawBody;
         } else {
             body.textContent = rawBody;
-            if (rawBody.length > 100) {
-                body.classList.add('collapsible');
-                const showMore = document.createElement('span');
-                showMore.className = 'more';
-                showMore.textContent = '... Show more';
-                body.appendChild(showMore);
-                showMore.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    body.classList.toggle('expanded');
-                    showMore.textContent = body.classList.contains('expanded') ? ' Show less' : '... Show more';
-                });
-            }
         }
     }
 
-    // Media and progress (if provided)
+    // ── Snippet: inserted dynamically right after the header ──
+    // Shows the first ~120 chars of the plain-text body when the
+    // card is collapsed. Hidden via CSS when expanded.
+    let snippetEl = card.querySelector('.card-snippet');
+    if (!snippetEl) {
+        snippetEl = document.createElement('div');
+        snippetEl.className = 'card-snippet';
+        const header = card.querySelector('.card-header');
+        if (header && header.parentNode) {
+            header.parentNode.insertBefore(snippetEl, header.nextSibling);
+        } else {
+            card.insertBefore(snippetEl, card.firstChild);
+        }
+    }
+    snippetEl.textContent = makeSnippet(notif.body || '');
+
+    // ── Media / progress / buttons (hidden until expanded, via CSS) ──
     const mediaContainer = card.querySelector('.card-media');
     if (mediaContainer && notif.media) {
         if (notif.media.type === 'image') {
@@ -594,7 +605,6 @@ function createCard(notif) {
         progressContainer.style.display = 'none';
     }
 
-    // Buttons container – remove precomputed buttons; they are inside body HTML
     const btnContainer = card.querySelector('.card-buttons');
     if (btnContainer) btnContainer.style.display = 'none';
 
@@ -607,6 +617,65 @@ function createCard(notif) {
         priorityEl.className = `card-priority priority-${notif.priority || 'normal'}`;
     }
 
+    // ── Expand chevron in the footer ──
+    let expandBtn = card.querySelector('.card-expand-btn');
+    if (!expandBtn) {
+        expandBtn = document.createElement('button');
+        expandBtn.className = 'card-expand-btn';
+        expandBtn.type = 'button';
+        expandBtn.setAttribute('aria-label', 'Toggle notification details');
+        const footer = card.querySelector('.card-footer');
+        if (footer) {
+            footer.appendChild(expandBtn);
+        } else {
+            card.appendChild(expandBtn);
+        }
+    }
+
+    // ── Initial state from expandedIds ──
+    const wasExpanded = expandedIds.has(notif.id);
+    if (wasExpanded) {
+        card.classList.add('expanded');
+        expandBtn.textContent = '▴';
+    } else {
+        card.classList.add('collapsed');
+        expandBtn.textContent = '▾';
+    }
+
+    // ── Toggle handler ──
+    // Expanding marks the notification as read — only on the FIRST
+    // expand, and only if not already read.
+    const toggle = () => {
+        const isCollapsed = card.classList.contains('collapsed');
+        if (isCollapsed) {
+            card.classList.remove('collapsed');
+            card.classList.add('expanded');
+            expandBtn.textContent = '▴';
+            expandedIds.add(notif.id);
+            if (!notif.read) markRead(notif.id);
+        } else {
+            card.classList.add('collapsed');
+            card.classList.remove('expanded');
+            expandBtn.textContent = '▾';
+            expandedIds.delete(notif.id);
+        }
+    };
+
+    // Header is clickable except on the pin/archive/delete buttons
+    const header = card.querySelector('.card-header');
+    if (header) {
+        header.style.cursor = 'pointer';
+        header.addEventListener('click', (e) => {
+            if (e.target.closest('.card-actions button')) return;
+            toggle();
+        });
+    }
+    expandBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggle();
+    });
+
+    // ── Pin / Archive / Delete ──
     const pinBtn = card.querySelector('.pin-btn');
     if (pinBtn) {
         pinBtn.addEventListener('click', (e) => {
@@ -628,10 +697,6 @@ function createCard(notif) {
             deleteNotification(notif.id);
         });
     }
-
-    card.addEventListener('click', () => {
-        if (!notif.read) markRead(notif.id);
-    });
 
     return card;
 }
@@ -702,23 +767,238 @@ function callBackendAction(apiName, data, notif) {
         });
 }
 
+// ==================== PUSH OPT-IN STATE ====================
+
+/**
+ * Whether push notifications are currently enabled for THIS device,
+ * per local state. This is the value the UI bell reflects. It's kept
+ * in sync with the backend by setPushEnabled(); the default (true)
+ * matches what a fresh login produces.
+ */
+export function isPushEnabled() {
+    const stored = utils.getLocalStorage(PUSH_ENABLED_KEY, null);
+    if (stored === 'false' || stored === false) return false;
+    return true;
+}
+
+function _setPushEnabledLocal(enabled) {
+    utils.setLocalStorage(PUSH_ENABLED_KEY, enabled ? 'true' : 'false');
+    events.events.emit('push-enabled-changed', { enabled: !!enabled });
+}
+
+/**
+ * Enable or disable push notifications for this device.
+ *
+ * Enabled → push/mutations:registerDevice (re-registers the current
+ *           FCM token, upserts fcmToken + pushEnabled=true).
+ * Disabled → push/mutations:deactivateDevice (flips pushEnabled=false;
+ *           keeps the token so re-enabling is instant).
+ *
+ * Requires online + authenticated. Returns true on success.
+ */
+export async function setPushEnabled(enabled) {
+    const desired = !!enabled;
+
+    if (!navigator.onLine) {
+        ui.showToast('You need to be online to change push settings', 'warning');
+        return false;
+    }
+    const token = getToken();
+    if (!token) {
+        ui.showToast('Please log in to change push settings', 'warning');
+        return false;
+    }
+
+    try {
+        const security = await import('./security.js');
+        const deviceId = await security.getDeviceId();
+
+        if (desired) {
+            const fcmToken =
+                (window.MedVixNotifications &&
+                 typeof window.MedVixNotifications.getCachedFcmToken === 'function')
+                    ? (window.MedVixNotifications.getCachedFcmToken() || '')
+                    : '';
+            if (!fcmToken) {
+                ui.showToast('Push token not ready on this device. Please try again shortly.', 'warning');
+                return false;
+            }
+            // Server function is action (verifyToken via runAction) → .action()
+            const result = await convexHttpClient.action(
+                'push/mutations:registerDevice',
+                { token, fcmToken, deviceId, platform: 'android' },
+            );
+            if (result && result.success === false) {
+                ui.showToast(result.message || 'Could not enable push', 'error');
+                return false;
+            }
+        } else {
+            // Server function is action → .action()
+            const result = await convexHttpClient.action(
+                'push/mutations:deactivateDevice',
+                { token, deviceId },
+            );
+            if (result && result.success === false) {
+                ui.showToast(result.message || 'Could not disable push', 'error');
+                return false;
+            }
+        }
+
+        _setPushEnabledLocal(desired);
+        ui.showToast(
+            desired ? 'Push notifications enabled' : 'Push notifications disabled',
+            'success',
+        );
+        return true;
+    } catch (err) {
+        console.warn('[Notifications] push toggle failed', err);
+        ui.showToast('Could not update push setting', 'error');
+        return false;
+    }
+}
+
+export async function togglePush() {
+    return setPushEnabled(!isPushEnabled());
+}
+
+// ==================== OFFLINE READ QUEUE ====================
+
+function _getPendingReads() {
+    try {
+        const raw = utils.getLocalStorage(PENDING_READS_KEY, null);
+        if (!raw) return [];
+        return Array.isArray(raw) ? raw : (JSON.parse(raw) || []);
+    } catch {
+        return [];
+    }
+}
+
+function _savePendingReads(reads) {
+    try {
+        utils.setLocalStorage(PENDING_READS_KEY, JSON.stringify(reads));
+    } catch { /* ignore storage failures */ }
+}
+
+function _queueRead(id) {
+    const pending = _getPendingReads();
+    if (!pending.some((r) => r.id === id)) {
+        pending.push({ id, at: Date.now() });
+        _savePendingReads(pending);
+    }
+}
+
+/**
+ * Drain the pending read queue. Called on online event and on
+ * notifications-page init. Safe to call concurrently — the queue is
+ * re-read at start and rewritten to only the entries that still
+ * failed, so a mid-flight second call doesn't double-send.
+ */
+export async function drainReadQueue() {
+    if (!navigator.onLine) return { sent: 0, failed: 0 };
+    const pending = _getPendingReads();
+    if (pending.length === 0) return { sent: 0, failed: 0 };
+
+    const token = getToken();
+    if (!token) return { sent: 0, failed: 0 };
+
+    const failed = [];
+    let sent = 0;
+
+    for (const r of pending) {
+        try {
+            const result = await convexHttpClient.mutation(
+                'notifications/mutations:markNotificationRead',
+                { token, notificationId: r.id },
+            );
+            if (result && result.success === false) {
+                failed.push(r);
+            } else {
+                sent++;
+            }
+        } catch {
+            failed.push(r);
+        }
+    }
+
+    _savePendingReads(failed);
+    if (sent > 0) {
+        console.log(`[Notifications] Drained ${sent} pending read receipt${sent === 1 ? '' : 's'}`);
+    }
+    return { sent, failed: failed.length };
+}
+
+// ==================== SNIPPET BUILDER ====================
+//
+// Collapsed cards show a short preview of the body. If the body is
+// HTML (backend message fragments are), strip tags + decode entities.
+// Truncate to SNIPPET_MAX. The ellipsis is intentional — the user
+// knows there's more to see.
+
+const SNIPPET_MAX = 120;
+
+function makeSnippet(body) {
+    if (!body || typeof body !== 'string') return '';
+    let text = body;
+
+    if (text.trim().startsWith('<')) {
+        text = text
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<br\s*\/?>/gi, ' ')
+            .replace(/<\/(p|li|div|h[1-6])>/gi, ' ')
+            .replace(/<[^>]+>/g, '')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+    } else {
+        text = text.replace(/\s+/g, ' ').trim();
+    }
+
+    if (text.length <= SNIPPET_MAX) return text;
+    return text.slice(0, SNIPPET_MAX).trimEnd() + '…';
+}
+
 // ==================== CRUD ====================
 export async function markRead(id) {
     const notif = notifications.find(n => n.id === id);
     if (!notif) return;
+    if (notif.read) return;  // idempotent
+
     notif.read = true;
-    try {
+
+    // ---- 1. Backend (with offline fallback to queue) ----
+    if (navigator.onLine) {
         const token = getToken();
         if (token) {
-            await convexHttpClient.mutation("notifications/mutations:markNotificationRead", {
-                token,
-                notificationId: id,
-            });
+            try {
+                // Server function is action (calls verifyToken via runAction),
+                // so client must use .action() — .mutation() would fail with
+                // FunctionType mismatch.
+                const result = await convexHttpClient.action(
+                    'notifications/mutations:markNotificationRead',
+                    { token, notificationId: id },
+                );
+                if (result && result.success === false) {
+                    _queueRead(id);
+                }
+            } catch (err) {
+                console.warn('[Notifications] Mark read network error — queueing', err);
+                _queueRead(id);
+            }
         }
-    } catch (err) {
-        console.warn('[Notifications] Mark read network error', err);
+    } else {
+        _queueRead(id);
     }
+
+    // ---- 2. Local DB (fast, always succeeds) ----
     await db.markNotificationRead(id).catch(() => {});
+
+    // ---- 3. UI refresh ----
     applyFilters();
     render();
     updateStats();
@@ -732,7 +1012,8 @@ export async function markAllRead() {
     try {
         const token = getToken();
         if (token) {
-            await convexHttpClient.mutation("notifications/mutations:markAllNotificationsRead", {
+            // Server function is action → use .action()
+            await convexHttpClient.action("notifications/mutations:markAllNotificationsRead", {
                 token,
             });
         }
@@ -1057,6 +1338,12 @@ window.notifications = {
     startPolling,
     stopPolling,
     registerAction,
+    // Push opt-out
+    isPushEnabled,
+    setPushEnabled,
+    togglePush,
+    // Offline read receipts
+    drainReadQueue,
     _processAction: processAction
 };
 

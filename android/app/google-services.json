@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "249249728692",
+    "project_id": "medvix-2a4a3",
+    "storage_bucket": "medvix-2a4a3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:249249728692:android:eeb0ae0f418205c6ecafe1",
+        "android_client_info": {
+          "package_name": "com.medhurb.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA1Fbk1gYPUUci8ZSOYNEJEfKo2gmoLqHY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

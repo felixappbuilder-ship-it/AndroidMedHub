@@ -27,6 +27,57 @@ import * as examEngine from './exam-engine.js';
 import { convexHttpClient } from './convex-client.js';
 import { navigateTo } from './router.js';
 
+// ==================== FCM TOKEN SYNC (BEST-EFFORT) ====================
+//
+// Three helpers, all safe to call from any login path.
+//
+// getFcmTokenFromBridge()
+//   Synchronous read of the cached FCM token. Returns null if the
+//   native bridge isn't registered yet, or if the token hasn't been
+//   fetched by FirebaseMessagingService / the MedVixNotifications
+//   constructor. Null is fine — the login action treats fcmToken as
+//   optional and the login flow proceeds without it. The
+//   syncFcmToBackendSafe() call below will retry once the token
+//   arrives.
+//
+// syncFcmToBackendSafe() / unregisterFcmFromBackendSafe()
+//   Lazy-import ./notification/native.js so auth.js doesn't hard-
+//   depend on the notification module (auth runs in pure web too).
+//   Both swallow errors — FCM registration is a nice-to-have, never
+//   a reason to break a login or a logout.
+
+function getFcmTokenFromBridge() {
+    try {
+        const bridge = window.MedVixNotifications;
+        if (!bridge || typeof bridge.getCachedFcmToken !== 'function') {
+            return null;
+        }
+        const t = bridge.getCachedFcmToken();
+        return (t && typeof t === 'string' && t.length > 0) ? t : null;
+    } catch {
+        return null;
+    }
+}
+
+async function syncFcmToBackendSafe() {
+    try {
+        const mod = await import('./notification/native.js');
+        await mod.syncFcmToBackend?.();
+    } catch (e) {
+        // Silent — FCM registration is best-effort
+        console.debug?.('[Auth] FCM sync skipped:', e?.message || e);
+    }
+}
+
+async function unregisterFcmFromBackendSafe() {
+    try {
+        const mod = await import('./notification/native.js');
+        await mod.unregisterFromBackend?.();
+    } catch (e) {
+        console.debug?.('[Auth] FCM unregister skipped:', e?.message || e);
+    }
+}
+
 // ==================== TOKEN MANAGEMENT ====================
 
 export function getToken() {
@@ -294,12 +345,14 @@ export async function login(identifier, password) {
     requireOnline();
 
     const { deviceId, deviceInfo } = await buildDeviceIdentity();
+    const fcmToken = getFcmTokenFromBridge();
 
     const result = await convexHttpClient.action('auth/actions:login', {
         identifier,
         password,
         deviceId,
         deviceInfo,
+        fcmToken: fcmToken || undefined,
     });
 
     // ---- DEVICE_LIMIT_REACHED ----
@@ -336,6 +389,14 @@ export async function login(identifier, password) {
         picture: data.picture || null,
     });
 
+    // Belt-and-suspenders: the login payload may have omitted
+    // fcmToken (if the bridge wasn't ready yet), or the token may
+    // have rotated between boot and this call. syncFcmToBackend
+    // reads the current cached token and pushes it via
+    // push/mutations:registerDevice. Safe to call even when the
+    // payload already carried the token — it's an upsert.
+    await syncFcmToBackendSafe();
+
     if (sessionId) utils.setLocalStorage('sessionId', sessionId);
     if (deviceId) security.setDeviceFingerprint(deviceId);
 
@@ -366,9 +427,11 @@ export async function login(identifier, password) {
 export async function removeDeviceAndContinue(switchToken, deviceToRemoveId) {
     requireOnline();
 
+    const fcmToken = getFcmTokenFromBridge();
+
     const result = await convexHttpClient.action(
         'auth/actions:removeDeviceAndContinue',
-        { switchToken, deviceToRemoveId }
+        { switchToken, deviceToRemoveId, fcmToken: fcmToken || undefined }
     );
 
     if (!result || !result.success) {
@@ -387,6 +450,10 @@ export async function removeDeviceAndContinue(switchToken, deviceToRemoveId) {
         deviceId,
         picture: picture || null 
     });
+
+    // Same belt-and-suspenders as login() — ensure the backend
+    // has this device's current FCM token after the device switch.
+    await syncFcmToBackendSafe();
 
     if (sessionId) utils.setLocalStorage('sessionId', sessionId);
 
@@ -411,6 +478,7 @@ export async function register(userData) {
     const agentVerified = userData.agentVerified || false;
 
     const { deviceId, deviceInfo } = await buildDeviceIdentity();
+    const fcmToken = getFcmTokenFromBridge();
 
     const result = await convexHttpClient.action('auth/actions:register', {
         name: userData.name,
@@ -426,6 +494,7 @@ export async function register(userData) {
         referralCode: referralCode || undefined,
         isAgent,
         agentVerified,
+        fcmToken: fcmToken || undefined,
     });
 
     if (!result || !result.success) {
@@ -453,6 +522,8 @@ export async function register(userData) {
         deviceId,
     });
 
+    await syncFcmToBackendSafe();
+
     if (sessionId) utils.setLocalStorage('sessionId', sessionId);
     if (deviceId) security.setDeviceFingerprint(deviceId);
 
@@ -478,6 +549,13 @@ export async function register(userData) {
 // ==================== LOGOUT ====================
 
 export async function logout() {
+    // Deactivate this device's push registration while the auth
+    // token is still valid — push/mutations:deactivateDevice needs
+    // a JWT to identify the user. Must run BEFORE clearToken().
+    // Fire-and-forget: logout must always succeed even if the
+    // network is down or Convex is unreachable.
+    await unregisterFcmFromBackendSafe();
+
     clearToken();
     utils.removeLocalStorage('sessionId');
     await clearUser();
@@ -826,6 +904,7 @@ export async function loginWithGoogle(idToken, referralCode) {
     requireOnline();
 
     const { deviceId, deviceInfo } = await buildDeviceIdentity();
+    const fcmToken = getFcmTokenFromBridge();
 
     const effectiveReferralCode = referralCode || getStoredReferralCode() || undefined;
 
@@ -834,6 +913,7 @@ export async function loginWithGoogle(idToken, referralCode) {
         deviceId,
         deviceInfo,
         referralCode: effectiveReferralCode,
+        fcmToken: fcmToken || undefined,
     });
 
     if (!result) throw new Error('Google sign-in failed: empty response');
@@ -876,6 +956,9 @@ export async function loginWithGoogle(idToken, referralCode) {
         setToken(data.token);
         if (data.sessionId) utils.setLocalStorage('sessionId', data.sessionId);
         if (user) await setUser(user);
+
+        await syncFcmToBackendSafe();
+
         if (deviceId) security.setDeviceFingerprint(deviceId);
 
         clearStoredReferralCode();
@@ -914,12 +997,14 @@ export async function linkGoogleAccount({
     const info = (deviceInfo && typeof deviceInfo === 'object')
         ? deviceInfo
         : fallback.deviceInfo;
+    const fcmToken = getFcmTokenFromBridge();
 
     const payload = {
         linkToken,
         password,
         deviceId: effectiveDeviceId,
         deviceInfo: info,
+        fcmToken: fcmToken || undefined,
     };
 
     const result = await convexHttpClient.action('auth/actions:linkGoogleAccount', payload);
@@ -934,6 +1019,9 @@ export async function linkGoogleAccount({
     setToken(data.token);
     if (data.sessionId) utils.setLocalStorage('sessionId', data.sessionId);
     if (user) await setUser(user);
+
+    await syncFcmToBackendSafe();
+
     if (effectiveDeviceId) security.setDeviceFingerprint(effectiveDeviceId);
 
     clearStoredReferralCode();

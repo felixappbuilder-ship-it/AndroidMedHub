@@ -155,10 +155,49 @@ function attachEventListeners(context) {
     markAllReadBtn.addEventListener('click', notifications.markAllRead);
   }
 
+  // Push opt-out toggle (bell). Local state drives the icon; the
+  // actual on/off is enforced server-side via
+  // push/mutations:registerDevice / deactivateDevice.
+  const pushToggleBtn = $('#pushToggleBtn');
+  if (pushToggleBtn) {
+    const syncPushIcon = () => {
+      const enabled =
+        typeof notifications.isPushEnabled === 'function'
+          ? notifications.isPushEnabled()
+          : true;
+      pushToggleBtn.textContent = enabled ? '🔔' : '🔕';
+      pushToggleBtn.title = enabled
+        ? 'Push notifications on — tap to disable'
+        : 'Push notifications off — tap to enable';
+      pushToggleBtn.classList.toggle('push-off', !enabled);
+    };
+    syncPushIcon();
+    pushToggleBtn.addEventListener('click', async () => {
+      if (typeof notifications.togglePush !== 'function') return;
+      pushToggleBtn.disabled = true;
+      try {
+        await notifications.togglePush();
+        syncPushIcon();
+      } finally {
+        pushToggleBtn.disabled = false;
+      }
+    });
+  }
+
   // Settings button (go to profile)
   const settingsBtn = $('#settingsBtn');
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => router.navigateTo('profile'));
+  }
+
+  // Online event: drain any pending read receipts the user accumulated
+  // while offline. Also run once now, in case the queue survived a
+  // reload while online.
+  if (typeof notifications.drainReadQueue === 'function') {
+    window.addEventListener('online', () => {
+      notifications.drainReadQueue().catch(() => {});
+    });
+    notifications.drainReadQueue().catch(() => {});
   }
 
   // Filter tabs — the only filter dimension left after chips were

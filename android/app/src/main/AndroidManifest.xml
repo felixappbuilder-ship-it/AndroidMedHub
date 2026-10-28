@@ -1,7 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          xmlns:tools="http://schemas.android.com/tools">
-
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <!-- ============================================================
          PERMISSIONS
          ============================================================ -->
@@ -12,31 +10,33 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- Notifications -->
+    <!-- VIBRATE: legacy haptic on pre-26 channels; still required on <26. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- POST_NOTIFICATIONS: runtime permission, Android 13+ (API 33). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- WAKE_LOCK: used by FCM's onMessageReceived when the device is dozing. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- RECEIVE_BOOT_COMPLETED: required for MedVixBootReceiver to restore
+         scheduled reminders after reboot and after Play Store updates
+         (MY_PACKAGE_REPLACED). Was previously stripped with tools:node="remove";
+         removed that directive here because the boot receiver needs it. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <!-- 🚫 Unused system permissions — removed from merged manifest.
-         These are auto-injected by plugins but MedVix does not use them. -->
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
-        tools:node="remove" />
-    <uses-permission
-        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
-        tools:node="remove" />
+         These are auto-injected by plugins but MedVix does not use them.
+         NOTE: RECEIVE_BOOT_COMPLETED deliberately excluded from this list
+         now that MedVixBootReceiver depends on it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" tools:node="remove" />
 
     <!-- Runtime (Dangerous) permissions – requested at runtime -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Storage permissions (Android 12 and below) -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
     <!-- DownloadManager support -->
     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
@@ -53,7 +53,6 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
         android:theme="@style/AppTheme">
-
         <!-- ===== Main Activity ===== -->
         <activity
             android:name=".MainActivity"
@@ -62,7 +61,6 @@
             android:label="@string/title_activity_main"
             android:launchMode="singleTask"
             android:theme="@style/AppTheme.NoActionBarLaunch">
-
             <!-- Launcher (app icon) -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -129,7 +127,6 @@
                     <data android:mimeType="text/plain" />
                 </intent-filter>
             -->
-
         </activity>
 
         <!-- ===== File provider for sharing/printing PDFs ===== -->
@@ -138,11 +135,50 @@
             android:authorities="${applicationId}.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- ============================================================
+             MedVix Notification Subsystem
+             ============================================================ -->
+        <!-- Fires when a reminder alarm scheduled by MedVixNotifications
+             elapses. Sends the notification using the medvix_general
+             channel. Not exported: alarms are delivered by AlarmManager
+             from our own UID, no other app needs to trigger this.
+             Class body lands in Checkpoint 3. -->
+        <receiver
+            android:name=".MedVixNotificationReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- Fires on device boot and on Play Store in-place update.
+             Both events clear AlarmManager, so the receiver re-reads
+             persisted reminders from SharedPreferences and re-schedules
+             anything whose fire time is still in the future.
+             BOOT_COMPLETED and MY_PACKAGE_REPLACED are protected system
+             broadcasts — delivered even though exported="false".
+             Class body lands in Checkpoint 3. -->
+        <receiver
+            android:name=".MedVixBootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Firebase Cloud Messaging entry point. Invoked by the Firebase
+             SDK (via its own internal process registration) when a push
+             arrives for this app. Not exported: only Firebase/system
+             delivers MESSAGING_EVENT. Class body lands in Checkpoint 3. -->
+        <service
+            android:name=".MedVixFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 
     <!-- ============================================================
@@ -150,7 +186,6 @@
          ============================================================ -->
 
     <queries>
-
         <intent>
             <action android:name="com.google.android.gms.auth.api.signin.ACTION_GOOGLE_SIGN_IN" />
         </intent>
@@ -189,7 +224,5 @@
             <action android:name="android.intent.action.SENDTO" />
             <data android:scheme="mailto" />
         </intent>
-
     </queries>
-
 </manifest>

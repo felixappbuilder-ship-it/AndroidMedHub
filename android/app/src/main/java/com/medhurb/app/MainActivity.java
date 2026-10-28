@@ -88,6 +88,15 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
 
         super.onCreate(savedInstanceState);
 
+        // ── PATCH A — cold-start notification route capture ───────────
+        //
+        // If the app was cold-launched by a notification tap, getIntent()
+        // carries the route extra. Persist it now so JS's
+        // consumePendingRoute() call after router-mount retrieves the
+        // right destination. Plain launcher taps carry no extra and this
+        // call is a no-op.
+        saveNotificationRoute(getIntent());
+
         // ── Hardware back button — OnBackPressedDispatcher ─────────────
         //
         // We no longer override onBackPressed() directly. That method is
@@ -244,6 +253,24 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
                 "MedVixStorage"
         );
 
+        // ── PATCH B — notification bridge + WebView reference ─────────
+        //
+        // Exposes window.MedVixNotifications — synchronous JS interface
+        // matching the MedVixStorage pattern above. Async results
+        // (permission grant, token refresh) are pushed to JS through
+        // window.MedVixNotificationCallbacks.onPermissionResult /
+        // .onFcmToken.
+        //
+        // setActiveWebView stores a WeakReference so
+        // MedVixFirebaseMessagingService can reach JS when a token
+        // rotates while the app is open. Must be cleared in onDestroy
+        // (Patch D) to prevent an Activity leak.
+        bridge.getWebView().addJavascriptInterface(
+                new MedVixNotifications(this),
+                "MedVixNotifications"
+        );
+        MedVixNotifications.setActiveWebView(bridge.getWebView());
+
         // ── Cold-start file open ────────────────────────────────────────
         //
         // If the app was launched by a file-open intent (the user tapped a
@@ -266,6 +293,16 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
         // recreation (rotation, process death) would re-deliver the FIRST
         // intent, which is stale by then.
         setIntent(intent);
+
+        // ── PATCH C — warm-start notification route capture ───────────
+        //
+        // Persist the route, then ping JS via a custom window event.
+        // JS responds by calling MedVixNotifications.consumePendingRoute()
+        // and navigating through the SPA router. Cold-start JS drains
+        // the route on its own after router-mount (Patch A's stored
+        // value), so this ping only matters when the app is already open.
+        saveNotificationRoute(intent);
+        dispatchNotificationTapToJs();
 
         // ── Warm-start file open ────────────────────────────────────────
         //
@@ -538,5 +575,83 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
         if (path == null || path.isEmpty()) return null;
 
         return uri.toString();
+    }
+
+    // ========================================================================
+    // PATCH D — Notification subsystem helpers
+    // ========================================================================
+
+    /**
+     * Persists a notification-tap destination for JS to drain via
+     * MedVixNotifications.consumePendingRoute().
+     *
+     * Reuses validateDeferredRoute() — the same guard that protects the
+     * Install Referrer deep-link path — so a notification route cannot
+     * smuggle in an external URL or protocol-relative destination.
+     *
+     * Safe to call unconditionally: intents without the
+     * medvix_notification_route extra are silently ignored.
+     */
+    private void saveNotificationRoute(Intent intent) {
+        if (intent == null) return;
+        String route = intent.getStringExtra("medvix_notification_route");
+        if (route == null || route.isEmpty()) return;
+
+        String safe = validateDeferredRoute(route);
+        if (safe == null) return;
+
+        getSharedPreferences(MedVixNotifications.PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(MedVixNotifications.KEY_PENDING_ROUTE, safe)
+                .apply();
+    }
+
+    /**
+     * Fires a CustomEvent 'medvix:notification-tapped' into the WebView.
+     * JS listens for this event, drains the pending route, and navigates.
+     *
+     * Guarded against a null bridge/WebView — the Activity could be in
+     * teardown, or Capacitor could still be constructing the WebView.
+     */
+    private void dispatchNotificationTapToJs() {
+        if (bridge == null || bridge.getWebView() == null) return;
+        bridge.getWebView().post(() -> {
+            try {
+                bridge.getWebView().evaluateJavascript(
+                        "(function(){window.dispatchEvent("
+                                + "new CustomEvent('medvix:notification-tapped'));})();",
+                        null);
+            } catch (Exception ignored) {}
+        });
+    }
+
+    /**
+     * Forwards the POST_NOTIFICATIONS dialog result to the bridge, which
+     * delivers it to JS via window.MedVixNotificationCallbacks
+     * .onPermissionResult(boolean).
+     *
+     * super.onRequestPermissionsResult must run first so Capacitor can
+     * dispatch to any @Permission-annotated plugin methods that share
+     * this Activity's request-code space.
+     */
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        MedVixNotifications.handlePermissionResult(requestCode, grantResults);
+    }
+
+    /**
+     * Drops the WebView reference held by the notification subsystem.
+     * Without this the static WeakReference would still be reachable
+     * from the FCM service when a token rotates after the Activity is
+     * destroyed — benign, but leaks the whole Activity through the
+     * WebView's Context chain.
+     */
+    @Override
+    public void onDestroy() {
+        MedVixNotifications.clearActiveWebView();
+        super.onDestroy();
     }
 }

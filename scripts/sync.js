@@ -10,7 +10,7 @@ import { navigateTo } from './router.js';
 // ==================== CONSTANTS ====================
 
 const SYNC_INTERVAL_MS = 30 * 60 * 1000;     // 30 minutes (background check)
-const SYNC_COOLDOWN_MS =24 * 60 * 60 * 1000;     // 1 hour (minimum time between full syncs)
+const SYNC_COOLDOWN_MS =24 * 60 * 60 * 1000;     
 const SYNC_STATE_KEY = 'sync_state';
 const SYNC_TIMER_KEY = 'sync_timer';
 
@@ -673,7 +673,8 @@ async function processSyncItem(item, token) {
             await processChallengeResult(item.data, token);
             break;
         case 'profile_update':
-            await convexHttpClient.mutation("users/mutations:updateProfile", {
+            // users/mutations:updateProfile is an action → .action()
+            await convexHttpClient.action("users/mutations:updateProfile", {
                 token,
                 ...item.data
             });
@@ -763,7 +764,10 @@ async function _syncUserProfile() {
 
     try {
         const result = await withTokenRetry(async (token) => {
-            return await convexHttpClient.query("users/queries:getProfile", { token });
+            // users/queries:getProfile is an action (calls verifyToken
+            // via runAction). Client must use .action() — .query()
+            // would fail with FunctionType mismatch.
+            return await convexHttpClient.action("users/queries:getProfile", { token });
         });
 
         if (result && result.success && result.data && result.data.user) {
@@ -835,7 +839,9 @@ export async function syncUserProfile(updates) {
         try {
             const token = getAuthToken();
             if (!token) return;
-            await convexHttpClient.mutation("users/mutations:updateProfile", {
+            // users/mutations:updateProfile is an action (has "use node",
+            // calls verifyToken via runAction). Client must use .action().
+            await convexHttpClient.action("users/mutations:updateProfile", {
                 token,
                 ...updates
             });

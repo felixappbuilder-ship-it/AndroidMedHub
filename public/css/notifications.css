@@ -645,3 +645,74 @@
     background: var(--accent-dark);
     transform: scale(1.02);
 }
+
+/* ================================================================
+   COLLAPSED / EXPANDED CARD — added for mark-read-on-expand
+   ================================================================ */
+
+/* Hide details until the user taps the header or chevron */
+.notifications-page .notif-card.collapsed .card-body,
+.notifications-page .notif-card.collapsed .card-media,
+.notifications-page .notif-card.collapsed .card-progress,
+.notifications-page .notif-card.collapsed .card-buttons {
+    display: none;
+}
+
+/* Snippet: shown only when collapsed */
+.notifications-page .notif-card .card-snippet {
+    display: none;
+    margin-top: 0.35rem;
+    padding-left: 3rem;
+    font-size: 0.86rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    font-style: italic;
+    /* Keep it to one visual line for a clean collapsed state */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.notifications-page .notif-card.collapsed .card-snippet {
+    display: block;
+}
+
+/* Clickable header — user taps anywhere except action buttons */
+.notifications-page .notif-card .card-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+/* Chevron toggle in the footer */
+.notifications-page .card-expand-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    color: var(--text-muted);
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+.notifications-page .card-expand-btn:hover {
+    color: var(--accent);
+    background: var(--bg-secondary);
+}
+
+/* Push toggle — visual state when disabled */
+.notifications-page #pushToggleBtn.push-off {
+    color: var(--danger);
+    opacity: 0.7;
+}
+.notifications-page #pushToggleBtn:disabled {
+    opacity: 0.4;
+    cursor: progress;
+}
+
+/* Mobile: drop the left indent on snippet so it aligns with body */
+@media (max-width: 640px) {
+    .notifications-page .notif-card .card-snippet {
+        padding-left: 0;
+    }
+}
