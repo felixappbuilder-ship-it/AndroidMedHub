@@ -1683,13 +1683,7 @@ async function bootstrap() {
         //
         // A hard 15 s timeout guards against any hung network call
         // inside init; after that we proceed anyway.
-        const initOutcome = await Promise.race([
-            localInitOutcome,
-            new Promise((resolve) => setTimeout(() => {
-                console.warn('[App] Local init timed out after 15s — continuing');
-                resolve({ ok: false, err: 'timeout' });
-            }, 15000)),
-        ]);
+
         const localOk  = initOutcome.ok;
         const localErr = initOutcome.err;
 
