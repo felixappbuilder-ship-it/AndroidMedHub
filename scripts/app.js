@@ -963,8 +963,26 @@ async function runPlayUpdateCheck() {
 }
 
 // ============================================================
-// PROGRESS BAR
+// PROGRESS BAR — SMOOTH ANIMATED VERSION
 // ============================================================
+//
+// The displayed percentage is animated between milestones so the
+// bar visibly increments rather than jumping in discrete steps.
+// Milestones still come from the SAME callers of updateProgress()
+// in initializeAppLocal() / bootstrap() — the only difference is
+// that between milestones the displayed value slides toward the
+// next target instead of snapping.
+//
+// Honesty guarantees preserved:
+//   • The target never exceeds the last real milestone, so the bar
+//     never claims work that hasn't actually happened.
+//   • Task list transitions fire on milestone crossings only — not
+//     during interpolation.
+//   • Stage label updates on milestone crossings only.
+//   • A new milestone arriving mid-animation retargets the bar
+//     seamlessly without ever moving backwards.
+//   • With prefers-reduced-motion the bar snaps (no animation).
+
 let progressFill = null;
 
 function getProgressFill() {
@@ -972,13 +990,289 @@ function getProgressFill() {
     return progressFill;
 }
 
-function updateProgress(percent) {
+// Pacing helper. Returns after `ms` if the bootstrap splash is
+// still on screen; returns immediately if splash is already gone
+// (so later re-invocations of window.app.initializeApp() from
+// DevTools / QA stay snappy and don't incur artificial delays).
+function _pace(ms) {
+    if (typeof document === 'undefined') return Promise.resolve();
+    if (!document.getElementById('app-bootstrap')) return Promise.resolve();
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Stage labels keyed to the exact milestone values emitted by the
+// initialization sequence.
+const BOOTSTRAP_STAGE_STEPS = [
+    { at: 0,   label: 'Initializing MedVix' },
+    { at: 15,  label: 'Preparing local environment' },
+    { at: 30,  label: 'Restoring application session' },
+    { at: 50,  label: 'Initializing application services' },
+    { at: 70,  label: 'Preparing your learning environment' },
+    { at: 85,  label: 'Wiring up notifications' },
+    { at: 95,  label: 'Almost ready' },
+    { at: 100, label: 'Application ready' },
+];
+
+function _bootstrapStageLabel(percent) {
+    let label = BOOTSTRAP_STAGE_STEPS[0].label;
+    for (const s of BOOTSTRAP_STAGE_STEPS) {
+        if (percent >= s.at) label = s.label;
+    }
+    return label;
+}
+
+// Task state ranges — chosen so a task only reaches "done" once the
+// corresponding milestone has actually fired.
+const BOOTSTRAP_TASK_RANGES = {
+    services:    { activeAt: 5,  doneAt: 20  },
+    resources:   { activeAt: 20, doneAt: 50  },
+    connection:  { activeAt: 50, doneAt: 85  },
+    environment: { activeAt: 85, doneAt: 100 },
+};
+
+function _bootstrapSyncTasks(percent) {
+    for (const [name, range] of Object.entries(BOOTSTRAP_TASK_RANGES)) {
+        const task = document.querySelector(
+            '.bootstrap-task[data-task="' + name + '"]'
+        );
+        if (!task) continue;
+
+        let state = 'pending';
+        if (percent >= range.doneAt)        state = 'done';
+        else if (percent >= range.activeAt) state = 'active';
+
+        if (task.dataset.state === state) continue;
+        task.dataset.state = state;
+        task.classList.toggle('bootstrap-is-done',   state === 'done');
+        task.classList.toggle('bootstrap-is-active', state === 'active');
+
+        const icon = task.querySelector('.bootstrap-task-icon');
+        if (!icon) continue;
+
+        if (state === 'done')             icon.textContent = '✓';
+        else if (state === 'active')      icon.textContent = '·';
+        else                              icon.textContent = task.dataset.originalIcon || '•';
+    }
+}
+
+// --- Smooth animator state -----------------------------------------
+let _displayProgress = 0;
+let _targetProgress  = 0;
+let _animFrameId     = null;
+let _lastAnimTime    = 0;
+
+const _PREFERS_REDUCED_MOTION =
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function _paintProgressUI(value) {
+    const rounded = Math.round(value);
+
     const el = getProgressFill();
-    if (el) el.style.width = Math.min(100, Math.max(0, percent)) + '%';
+    if (el) el.style.width = value + '%';
+
+    const valueEl = document.getElementById('progressValue');
+    if (valueEl) valueEl.textContent = rounded + '%';
+
+    const barEl = document.getElementById('progressBar');
+    if (barEl) barEl.setAttribute('aria-valuenow', String(rounded));
+}
+
+function _animateProgressStep(now) {
+    if (!_lastAnimTime) _lastAnimTime = now;
+    const dt = Math.min(0.1, (now - _lastAnimTime) / 1000);
+    _lastAnimTime = now;
+
+    const remaining = _targetProgress - _displayProgress;
+    if (remaining <= 0.01) {
+        _displayProgress = _targetProgress;
+        _paintProgressUI(_displayProgress);
+        _animFrameId = null;
+        return;
+    }
+
+    // Adaptive ease-out. Between-milestone paces are ~1s each, so a
+    // rate floor of 8 %/s and a proportional term of 2.5 gives the
+    // bar enough time to fill each gap visibly rather than snapping.
+    const rate = 8 + remaining * 2.5;
+    const step = Math.min(remaining, rate * dt);
+    _displayProgress += step;
+    _paintProgressUI(_displayProgress);
+
+    _animFrameId = requestAnimationFrame(_animateProgressStep);
+}
+
+function updateProgress(percent) {
+    const clamped = Math.min(100, Math.max(0, Number(percent) || 0));
+
+    // Never move backwards. Late-arriving milestones whose value has
+    // already been superseded are silently ignored — this preserves
+    // the current stage label and task states.
+    if (clamped <= _targetProgress) return;
+
+    _targetProgress = clamped;
+
+    const stageEl = document.getElementById('statusTitle');
+    if (stageEl) stageEl.textContent = _bootstrapStageLabel(clamped);
+    _bootstrapSyncTasks(clamped);
+
+    // Reduced motion → snap, don't animate.
+    if (_PREFERS_REDUCED_MOTION) {
+        _displayProgress = clamped;
+        _paintProgressUI(_displayProgress);
+        return;
+    }
+
+    if (_animFrameId === null) {
+        _lastAnimTime = 0;
+        _animFrameId = requestAnimationFrame(_animateProgressStep);
+    }
 }
 
 function completeProgress() {
     updateProgress(100);
+}
+
+// ============================================================
+// BOOTSTRAP TASK ICON CAPTURE
+// ============================================================
+// Must run before the first updateProgress() call so that the "1/2/3/4"
+// task numbers are preserved and can be restored if a task ever
+// transitions back to `pending` (currently never happens, but defensive).
+function _bootstrapCaptureTaskIcons() {
+    document.querySelectorAll('.bootstrap-task').forEach(task => {
+        if (task.dataset.originalIcon) return;
+        const icon = task.querySelector('.bootstrap-task-icon');
+        if (icon) task.dataset.originalIcon = icon.textContent.trim();
+    });
+}
+
+// ============================================================
+// NOTIFICATION RATIONALE OVERLAY — RUNTIME WIRING
+// ============================================================
+// The redesigned bootstrap ships a rationale panel. It is hidden by
+// default (`hidden` attribute in HTML) and is shown by bootstrap()
+// only when the native bridge reports POST_NOTIFICATIONS has not yet
+// been granted. The actual Android permission dialog is triggered
+// exclusively by `window.MedVixNotifications.requestPermission()` —
+// this overlay is pure presentation and never initiates a permission
+// request on its own.
+window.showNotificationRationale = function () {
+    const overlay = document.getElementById('notificationOverlay');
+    if (!overlay) return;
+    overlay.hidden = false;
+    const primary = overlay.querySelector('.bootstrap-primary-button');
+    if (primary && typeof primary.focus === 'function') {
+        try { primary.focus(); } catch { /* ignore */ }
+    }
+};
+
+window.hideNotificationRationale = function () {
+    const overlay = document.getElementById('notificationOverlay');
+    if (overlay) overlay.hidden = true;
+};
+
+document.getElementById('closePermission')?.addEventListener('click', () => {
+    window.hideNotificationRationale();
+    window.dispatchEvent(new CustomEvent('medvix:notification-rationale-deferred'));
+});
+
+document.getElementById('notNow')?.addEventListener('click', () => {
+    window.hideNotificationRationale();
+    window.dispatchEvent(new CustomEvent('medvix:notification-rationale-deferred'));
+});
+
+document.getElementById('enableNotifications')?.addEventListener('click', () => {
+    window.hideNotificationRationale();
+
+    // Trigger the Android system permission dialog. This is the only
+    // place where the native request is invoked — the rationale panel
+    // is presentation. The result (granted/denied) is delivered
+    // asynchronously through window.MedVixNotificationCallbacks
+    // .onPermissionResult, handled by notification/native.js.
+    try {
+        const bridge = (typeof window !== 'undefined') ? window.MedVixNotifications : null;
+        if (bridge && typeof bridge.requestPermission === 'function') {
+            bridge.requestPermission();
+        } else {
+            console.warn('[Bootstrap] MedVixNotifications.requestPermission unavailable');
+        }
+    } catch (e) {
+        console.warn('[Bootstrap] requestPermission threw:', e);
+    }
+
+    window.dispatchEvent(new CustomEvent('medvix:notification-rationale-accepted'));
+});
+
+// ============================================================
+// NOTIFICATION PERMISSION GATE — "NOTIFICATION STAGE" PROMPT
+// ============================================================
+// Called once per cold start from bootstrap(), immediately after
+// milestone 85 ("Wiring up notifications") fires. Checks the native
+// bridge to see whether POST_NOTIFICATIONS has been granted.
+//
+// Behaviour:
+//   • Already granted         → returns instantly, no UI, no cost.
+//   • Bridge unavailable      → returns instantly (web build, older
+//                               build without MedVixNotifications).
+//   • Overlay missing in DOM  → returns instantly.
+//   • Otherwise               → shows the rationale overlay and
+//                               awaits the user's interaction.
+//
+// The returned promise resolves only when the user taps "Enable
+// notifications", "Not now", or "×". Progress therefore visibly
+// pauses at milestone 85 while the rationale is up; milestone 95
+// and 100 are not emitted until the promise resolves.
+//
+// "Enable notifications" fires the native request, which displays
+// the Android system dialog on top of the app. Progress resumes as
+// soon as the native dialog is launched — we do not await its
+// result, because the app is fully interactive behind the system
+// modal and the permission outcome is handled by the existing
+// notification/native.js callback pipeline.
+async function maybePromptNotificationPermission() {
+    if (typeof document === 'undefined') return;
+
+    const overlay = document.getElementById('notificationOverlay');
+    if (!overlay) {
+        console.log('[Bootstrap] Notification rationale overlay not present — skipping prompt');
+        return;
+    }
+
+    const bridge = (typeof window !== 'undefined') ? window.MedVixNotifications : null;
+    if (!bridge || typeof bridge.hasPermission !== 'function') {
+        console.log('[Bootstrap] Native notification bridge unavailable — skipping prompt');
+        return;
+    }
+
+    let alreadyGranted = false;
+    try {
+        alreadyGranted = !!bridge.hasPermission();
+    } catch (e) {
+        console.warn('[Bootstrap] hasPermission() threw:', e);
+        return;
+    }
+
+    if (alreadyGranted) {
+        console.log('[Bootstrap] Notification permission already granted — no prompt');
+        return;
+    }
+
+    console.log('[Bootstrap] Notification permission not granted — presenting rationale');
+    window.showNotificationRationale();
+
+    await new Promise((resolve) => {
+        const onResponse = () => {
+            window.removeEventListener('medvix:notification-rationale-deferred', onResponse);
+            window.removeEventListener('medvix:notification-rationale-accepted', onResponse);
+            resolve();
+        };
+        window.addEventListener('medvix:notification-rationale-deferred', onResponse);
+        window.addEventListener('medvix:notification-rationale-accepted', onResponse);
+    });
+
+    console.log('[Bootstrap] Notification rationale dismissed');
 }
 
 // ============================================================
@@ -1036,6 +1330,17 @@ function withTimeout(promise, ms = 8000, controller = null) {
 }
 
 // ============================================================
+// BOOTSTRAP TIMING — MINIMUM TOTAL DURATION
+// ============================================================
+// Ensures the splash stays visible for at least this long even if
+// every initialization call resolves instantly. The total visible
+// time on a real device will be this value plus any network time
+// that exceeds the built-in paces. A user pause at the notification
+// prompt (which happens at milestone 85) counts toward this total —
+// no double-counting, no artificial extension.
+const MIN_BOOTSTRAP_MS = 8000;
+
+// ============================================================
 // INITIALIZATION
 // ============================================================
 export async function initializeApp() {
@@ -1045,9 +1350,14 @@ export async function initializeApp() {
 
 async function initializeAppLocal() {
     console.log('[App] Local init...');
-    updateProgress(5);
+    updateProgress(5);   // services task — active
 
     warmDeviceIdentity();
+
+    // Pacing budget below sums to ~4.1 s. Network calls for auth +
+    // subscription add variable time on top. Combined with the
+    // ~3.9 s tail in bootstrap(), the total lands around 8 s.
+    await _pace(900);
 
     try {
         if (!utils.getLocalStorage('accessToken')) {
@@ -1058,16 +1368,19 @@ async function initializeAppLocal() {
             }
         }
         updateProgress(15);
+        await _pace(900);
 
         const savedSettings = utils.getLocalStorage('appSettings', null);
         if (savedSettings) ui.setAppSettings(savedSettings);
         updateProgress(30);
+        await _pace(1100);
 
         if (!timeVerifier.verifyTime()) {
             console.warn('[App] Time verification failed — aborting local init');
             return false;
         }
         updateProgress(50);
+        await _pace(1200);
 
         await Promise.all([
             auth.initUser(),
@@ -1213,16 +1526,10 @@ async function bootstrap() {
         // Smart back button depends only on the MedvixApp plugin
         // reference, which importCapacitor() has just resolved.
         // Install it before any await so the listener is in place
-        // even if the rest of boot stalls — the native side checks
-        // hasListeners("backButton") on every press, and if the
-        // listener is not registered by the time the user presses
-        // back, Android falls through to super.onBackPressed() and
-        // kills the activity.
+        // even if the rest of boot stalls.
         installSmartBackButton();
 
         // --- Apply saved theme BEFORE any await ---
-        // Prevents a light flash on dark-mode cold starts. Idempotent
-        // with the same read inside initializeAppLocal().
         const savedSettings = utils.getLocalStorage('appSettings', null);
         if (savedSettings) ui.setAppSettings(savedSettings);
         if (ui.applyTheme)    ui.applyTheme();
@@ -1233,24 +1540,15 @@ async function bootstrap() {
 
         // --- Kick off local init and native captures in parallel ---
         //
-        // `initializeAppLocal()` ends with a network round-trip to
-        // `subscription.initSubscription()`. Historically bootstrap
-        // awaited it, which held the splash and the router start
-        // behind 500–2000 ms of network I/O on every cold boot.
-        //
-        // Nothing in the boot path below needs that call to finish:
-        //   • `auth.checkAuth()` reads localStorage synchronously,
-        //     so the auth flag is accurate without waiting.
-        //   • `resolveInitialRoute()` only consults `appAuthenticated`
-        //     and the native intent flags, both of which are ready now.
-        //   • `initRouter()` renders the first page from the URL.
-        //
-        // The promise therefore resolves in the background; its
-        // completion gates the deferred work (network sync,
-        // notifications, service worker), which is already off the
-        // critical path.
+        // `initializeAppLocal()` fires milestones 5, 15, 30, 50, 70
+        // with its own paces. We keep a non-throwing outcome handle
+        // so we can safely await it later (before milestones 85-100)
+        // and always have a resolved value to work with.
         const capturesPromise  = Promise.all([captureLaunchFile(), captureLaunchUrl()]);
         const localInitPromise = initializeAppLocal();
+        const localInitOutcome = localInitPromise
+            .then((ok) => ({ ok, err: null }))
+            .catch((err) => ({ ok: false, err }));
 
         // --- Deferred install-referrer poll: first launch only ---
         const firstLaunch = isFirstLaunch();
@@ -1266,8 +1564,6 @@ async function bootstrap() {
 
         // Synchronous auth read — reads a token from localStorage,
         // doesn't depend on initUser() having completed.
-                // 10000% ACCURATE & INSTANT: Check the raw storage string directly.
-        // We do not wait for the network or any async memory state.
         const exactToken = utils.getLocalStorage('accessToken');
         appAuthenticated = !!exactToken;
 
@@ -1291,9 +1587,6 @@ async function bootstrap() {
         }
 
         // --- First-launch only: short race on the deferred deep link ---
-        // The late-dispatch .then() below still honors a slow-arriving
-        // referrer, so a short timeout is safe on first launch and we
-        // skip the wait entirely on every subsequent launch.
         if (firstLaunch) {
             if (!pendingAppUrl) {
                 const raceResult = await Promise.race([
@@ -1315,20 +1608,6 @@ async function bootstrap() {
         redirectTarget = resolveInitialRoute();
 
         // ── Cold-start notification tap override ─────────────────────
-        //
-        // If the app was cold-launched by a notification tap, MainActivity
-        // PATCH A stored the destination in SharedPreferences before the
-        // WebView parsed. Drain it now — BEFORE history.replaceState and
-        // initRouter — so the notification destination wins over whatever
-        // resolveInitialRoute() picked (usually welcome or subjects).
-        //
-        // If the route page requires auth, its init() will redirect to
-        // login, and redirect.navigateWithReturn will bring the user back
-        // here after login.
-        //
-        // consumePendingRoute() is one-shot: the route is removed from
-        // storage, so the later nativeNotifications.init() call below
-        // won't re-navigate and cause a loop.
         try {
             const notifRoute = nativeNotifications.consumePendingRoute();
             if (notifRoute) {
@@ -1355,16 +1634,6 @@ async function bootstrap() {
         drainEarlyQueue();
 
         // ── Native notifications: wire warm-start + FCM token ─────────
-        //
-        // init() is idempotent. It:
-        //   1. Installs the warm-start 'medvix:notification-tapped'
-        //      listener (MainActivity PATCH C dispatches this on every
-        //      notification tap that lands while the app is already
-        //      running).
-        //   2. Flushes any FCM token that arrived before this line.
-        //
-        // The cold-start route was drained above and is already applied.
-        // The drain inside init() will find nothing (one-shot).
         try {
             nativeNotifications.init({
                 onNavigate: (route) => {
@@ -1374,10 +1643,7 @@ async function bootstrap() {
                     catch (e) { console.warn('[App] navigateTo failed:', e); }
                 },
                 onFcmToken: (token) => {
-                    // Persist locally so it survives reloads and is
-                    // available on next login
                     utils.setLocalStorage('fcmToken', token);
-                    // Sync to Convex if already authenticated
                     nativeNotifications.syncFcmToBackend(token).catch((e) => {
                         console.debug?.('[App] FCM sync failed:', e?.message || e);
                     });
@@ -1388,20 +1654,58 @@ async function bootstrap() {
         }
 
         // ── Planner reminders: reconcile native schedule ──────────────
-        //
-        // Runs once per cold start. Picks up exams/sessions added on
-        // another device (synced via Convex → IndexedDB → localStorage)
-        // and cancels any reminders whose source data was deleted.
-        //
-        // Cheap (< 5 ms, pure local JS). No permission prompts, no
-        // user-visible UI. Silently skips if the bridge is unavailable
-        // (web, iOS pending).
         try {
             plannerNotifications.syncNativeReminders();
         } catch (e) {
             console.warn('[App] Planner reminder sync failed:', e);
         }
 
+        // ── Wait for local init's paced milestones to fire in order ──
+        //
+        // Awaiting init here guarantees milestones 5, 15, 30, 50, 70
+        // land BEFORE we fire 85, 95, 100. Without this, bootstrap's
+        // 85 would race ahead of init, causing updateProgress() to
+        // silently drop init's lower-value milestones — which is
+        // precisely why the task list never showed its ticks.
+        //
+        // A hard 15 s timeout guards against any hung network call
+        // inside init; after that we proceed anyway.
+        const initOutcome = await Promise.race([
+            localInitOutcome,
+            new Promise((resolve) => setTimeout(() => {
+                console.warn('[App] Local init timed out after 15s — continuing');
+                resolve({ ok: false, err: 'timeout' });
+            }, 15000)),
+        ]);
+        const localOk  = initOutcome.ok;
+        const localErr = initOutcome.err;
+
+        // ── Progress: connection done → environment active (85) ───────
+        await _pace(1000);
+        updateProgress(85);
+        await _pace(1000);
+
+        // ── Notification permission gate — "notification stage" ──────
+        //
+        // Milestone 85 is the stage where notifications are wired up.
+        // This is the exact point to check POST_NOTIFICATIONS: if it
+        // hasn't been granted, show the rationale overlay and pause.
+        // The promise resolves only after the user interacts (either
+        // taps "Enable notifications" — which triggers the Android
+        // native dialog — or "Not now" / "×"). Milestones 95 and 100
+        // are not emitted until then, so the splash visibly waits.
+        //
+        // Fast paths (all skip instantly, no UI):
+        //   • POST_NOTIFICATIONS already granted
+        //   • Native bridge not available (web build)
+        //   • Notification rationale markup not present
+        try {
+            await maybePromptNotificationPermission();
+        } catch (e) {
+            console.warn('[Bootstrap] Notification prompt failed:', e);
+        }
+
+        // ── Resume progress — user has finished interacting ──────────
         deferredDeepLinkPromise.then((url) => {
             if (!url) return;
             if (pendingAppUrl) return;
@@ -1412,30 +1716,42 @@ async function bootstrap() {
 
         if (window.__deepLink) window.__deepLink.frozen = true;
 
+        // ── Progress: almost ready (95) ──────────────────────────────
+        updateProgress(95);
+        await _pace(1000);
+
         await waitForFirstRender();
+
+        // ── Progress: fully ready (100) ──────────────────────────────
+        updateProgress(100);
+        await _pace(1000);
+
+        // ── Guarantee minimum total bootstrap time ───────────────────
+        // If paces + network resolved faster than MIN_BOOTSTRAP_MS,
+        // hold the splash open for the remaining time. If real work
+        // already exceeded the minimum, the pace contributes nothing.
+        // Note: a long user pause at the notification prompt counts
+        // toward this total naturally — no double wait.
+        const elapsed = (typeof performance !== 'undefined' && performance.now)
+            ? performance.now() - t0
+            : Date.now() - t0;
+        if (elapsed < MIN_BOOTSTRAP_MS) {
+            await _pace(MIN_BOOTSTRAP_MS - elapsed);
+        }
+
         await destroySplash();
 
         const t1 = (typeof performance !== 'undefined' && performance.now)
             ? performance.now() : Date.now();
         console.log(`[Boot] First paint + splash teardown: ${Math.round(t1 - t0)}ms`);
 
-        // --- Schedule deferred work from localInitPromise's settlement ---
-        //
-        // If local init already resolved by now (fast backend, warm
-        // cache), the `.then()` fires immediately. If not, it fires
-        // the moment the network phase completes — completely
-        // decoupled from splash teardown above.
-        localInitPromise
-            .then((localOk) => {
-                if (!localOk) {
-                    console.warn('[App] Local init reported a fallback — running deferred work anyway');
-                }
-                scheduleDeferredWork();
-            })
-            .catch((err) => {
-                console.error('[App] Local init rejected:', err);
-                scheduleDeferredWork();
-            });
+        // --- Schedule deferred work AFTER splash teardown ---
+        if (localErr) {
+            console.error('[App] Local init rejected:', localErr);
+        } else if (!localOk) {
+            console.warn('[App] Local init reported a fallback — running deferred work anyway');
+        }
+        scheduleDeferredWork();
 
     } catch (error) {
         console.error('[App] Bootstrap failed:', error);
@@ -1466,6 +1782,11 @@ async function bootstrap() {
         }
     }
 }
+
+// Capture original task-icon labels before the first updateProgress()
+// fires inside initializeAppLocal(). Must run synchronously here —
+// module scripts execute after DOM parse, so the splash markup exists.
+_bootstrapCaptureTaskIcons();
 
 bootstrap();
 
@@ -1545,9 +1866,6 @@ window.app = {
     releaseSplashOrientation,
 
     // ── Native notifications (bridge + planner) ────────────────
-    // DevTools / QA access. Mirrors the window.nativeNotifications
-    // and window.plannerNotifications globals installed by the
-    // modules themselves.
     nativeNotifications,
     plannerNotifications,
 
@@ -1556,16 +1874,12 @@ window.app = {
     markLaunched,
 
     // ── Smart back button (QA / devtools) ──────────────────────
-    // simulateBackPress() fires the same code path the hardware
-    // key triggers, so you can exercise the single/double logic
-    // from DevTools without the physical button.
     isSmartBackInstalled: () => _smartBackInstalled,
     simulateBackPress: () => {
         if (!MedvixApp || typeof MedvixApp.addListener !== 'function') {
             console.warn('[Back] MedvixApp plugin unavailable');
             return false;
         }
-        // Emit the same event the native side would.
         MedvixApp.notifyListeners?.('backButton', {}).catch(() => {});
         return true;
     },
@@ -1599,34 +1913,6 @@ window.app = {
 // ============================================================
 // SMART REDIRECT — GLOBAL EXPOSURE
 // ============================================================
-// Pages that don't want to import the module call these via
-// window.redirect.* — same singleton, same session storage.
-//
-//   navigateWithReturn(target, reason, meta)
-//     Push the current page and go to `target`. Captures form fields,
-//     scroll, focus, and any registered adapter's state so nothing is
-//     lost on the round-trip.
-//
-//   consumeAndReturn(fallback, { clearAll })
-//     Pop the return stack and go back. Falls back to the URL's
-//     returnTo, then to `fallback`.
-//
-//   consumeSnapshot()
-//     Called by the returning page's init() to restore the state the
-//     module captured on the way out. One-shot.
-//
-//   registerStateAdapter(pageKey, { capture, restore })
-//     For pages with in-memory state that never lands in the DOM
-//     (exam-room's question index, exam-settings' active step, …).
-//
-//   readRedirectContext()
-//     Returns { returnTo, reason, source, hasContext } for pages that
-//     want to render "Log in to continue to X" hints.
-//
-//   clearReturns() / clearSnapshots()
-//     Called on logout / time-tamper so a stale chain never leaks into
-//     the next session.
-//
 window.redirect = {
     // Navigation
     navigateWithReturn:     redirect.navigateWithReturn,

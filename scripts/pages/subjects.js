@@ -577,26 +577,32 @@ function setupUserMenu() {
   const avatarText = $('#userAvatarText');
   const avatarImg = $('#userAvatarImg');
 
-  if (user) {
+if (user) {
     const imgUrl = user.picture || user.photoURL || user.avatar || user.avatarUrl;
+    
+    // Helper function to extract 2-letter initials
+    const getInitials = (nameString) => {
+      const cleanName = (nameString || 'User').trim();
+      const parts = cleanName.split(/\s+/);
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return cleanName.substring(0, 2).toUpperCase();
+    };
 
     if (imgUrl) {
-      // Use online image directly, rely on browser caching
+      avatarImg.setAttribute('referrerpolicy', 'no-referrer');
       avatarImg.src = imgUrl;
       avatarImg.style.display = 'block';
       avatarText.style.display = 'none';
       
-      // If the image fails to load (offline/broken link), revert to initials
       avatarImg.onerror = () => {
         avatarImg.style.display = 'none';
-        const nameStr = user.name || user.email || 'User';
-        avatarText.textContent = nameStr.charAt(0).toUpperCase();
+        avatarText.textContent = getInitials(user.name || user.email);
         avatarText.style.display = 'flex';
       };
     } else {
-      // No image URL, use initials
-      const nameStr = user.name || user.email || 'User';
-      avatarText.textContent = nameStr.charAt(0).toUpperCase();
+      avatarText.textContent = getInitials(user.name || user.email);
       avatarText.style.display = 'flex';
       avatarImg.style.display = 'none';
     }

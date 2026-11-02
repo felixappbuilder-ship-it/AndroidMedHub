@@ -113,13 +113,14 @@ const PRESSURE_WARNING_RATIO = 0.75;
 /** Mem-pressure threshold: critical at 90% of cap. @private */
 const PRESSURE_CRITICAL_RATIO = 0.9;
 
+// Change this constant near the top of managers.js
 /**
- * Mem-pressure hysteresis: reset to 'none' below 65%. Wider than the
- * classic 70% so eviction does not immediately trigger a new alloc→evict
- * cycle when the pyramid rebuilds.
+ * Mem-pressure hysteresis: reset to 'none' below 50%.
+ * Widened from 65% so heavy PPT-PDF evictions clear enough room
+ * before the pyramid starts allocating again.
  * @private
  */
-const PRESSURE_RESET_RATIO = 0.65;
+const PRESSURE_RESET_RATIO = 0.50;
 
 /** Eviction radius sequence when under pressure. @private */
 const EVICTION_RADII = [4, 3, 2, 1, 0];
@@ -1170,7 +1171,11 @@ export class SearchManager {
       layer.style.width = slot.offsetWidth + 'px';
       layer.style.height = slot.offsetHeight + 'px';
 
+// Inside SearchManager.renderHighlights...
       layer.innerHTML = '';
+
+      // NEW: Use a DocumentFragment to batch DOM inserts (massive speedup for many highlights)
+      const fragment = document.createDocumentFragment();
 
       for (const match of matches) {
         const isActive = match === currentMatch;
@@ -1187,9 +1192,12 @@ export class SearchManager {
           el.style.border = isActive ? '1px solid rgba(200, 200, 0, 0.8)' : '1px solid rgba(0, 0, 200, 0.3)';
           el.style.borderRadius = '3px';
           
-          layer.appendChild(el);
+          // Append to fragment in memory, not the live DOM
+          fragment.appendChild(el); 
         }
       }
+      // Insert all highlights at once
+      layer.appendChild(fragment);
     }
   }
 

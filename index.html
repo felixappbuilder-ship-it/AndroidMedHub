@@ -3,11 +3,7 @@
 
 <head>
     <meta charset="UTF-8" />
-    <!-- viewport-fit=cover is required for env(safe-area-inset-*) to
-         resolve to non-zero values on Android 15+ edge-to-edge layout
-         and on notched devices. Without it, the safe-area padding in
-         common.css and in this file's splash style would collapse to 0
-         and content would sit under the status bar. Do not remove. -->
+    
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes" />
     <meta name="theme-color" content="#0b1120" />
     <meta name="application-name" content="MedVix" />
@@ -39,200 +35,1560 @@
     <script src="/libs/pdfkit.standalone.js"></script>
 
     <!-- ============================================================
-         SPLASH-ONLY CSS
+         BOOTSTRAP SPLASH CSS — NEW DESIGN (ISOLATED)
+         ------------------------------------------------------------
+         • ID is medvex-splash-css (matches destroySplash() in app.js).
+         • Every selector scoped under #app-bootstrap / .bootstrap-
+           permission-overlay; every class prefixed bootstrap-.
+         • #app-bootstrap is fixed to 100svh with overflow:hidden so
+           the stage can NEVER spill to a lower page. Every sizable
+           element is vh-clamped, and four height tiers compact the
+           layout further on short viewports.
          ============================================================ -->
-    <style id="medvix-splash-css">
+    <style id="medvex-splash-css">
+        /* ---------- Outer splash shell --------------------------- */
         #app-bootstrap {
             position: fixed;
             inset: 0;
             z-index: 99999;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: flex-end;
-            /* Bottom padding now also clears the gesture navigation
-               bar. Position: fixed means the splash covers the full
-               viewport including the status bar and navigation bar
-               areas, so any bottom-anchored content (spinner, progress
-               bar, version text) would otherwise sit half-hidden
-               behind the gesture pill. The inset resolves to 0 on
-               devices with hardware navigation keys, so this is a
-               no-op there. */
-            padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px));
-            /* Solid colour from the very first frame, before the image
-               loads. Matches the theme's window background and the
-               Android status bar colour so the transition is seamless.
-
-               Note: with edge-to-edge enabled, this background paints
-               behind the status bar icons. The icon tint during the
-               launch window is set to white by MainActivity (dark
-               background → white icons). The moment the WebView boots
-               and syncStatusBar() runs, the icon tint follows the
-               user's saved theme. This splash is always dark, so on
-               a light-theme user's device the icons briefly stay
-               white over the dark splash and then flip to dark when
-               the app shell paints. That is the intended sequence —
-               it matches the launch animation. */
-            background-color: #0b1120;
-            background-image: url('/assets/images/splash.png');
-            background-size: 100% 100%;
-            background-position: center;
-            background-repeat: no-repeat;
+            overflow: hidden;
+            isolation: isolate;
+            display: grid;
+            place-items: center;
+            width: 100%;
+            height: 100vh;
+            height: 100svh;
+            max-height: 100vh;
+            max-height: 100svh;
+            padding:
+                max(12px, env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px));
+            color: #f4f8ff;
+            font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+            background:
+                radial-gradient(ellipse at 50% 36%, rgba(0, 91, 190, .20), transparent 38%),
+                radial-gradient(ellipse at 50% 100%, rgba(0, 70, 160, .15), transparent 45%),
+                linear-gradient(160deg, #020711 0%, #061326 48%, #020711 100%);
             transition: opacity 0.5s ease;
         }
 
-        #app-bootstrap::after {
-            content: '';
+        #app-bootstrap *,
+        #app-bootstrap *::before,
+        #app-bootstrap *::after {
+            box-sizing: border-box;
+        }
+
+        #app-bootstrap::before {
+            content: "";
             position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            height: 45%;
-            background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, transparent 100%);
+            inset: 0;
+            z-index: -1;
+            opacity: .18;
+            background-image:
+                linear-gradient(rgba(32, 126, 220, .08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(32, 126, 220, .08) 1px, transparent 1px);
+            background-size: 38px 38px;
+            -webkit-mask-image: linear-gradient(to bottom, transparent, #000 25%, #000 75%, transparent);
+            mask-image: linear-gradient(to bottom, transparent, #000 25%, #000 75%, transparent);
             pointer-events: none;
-            z-index: 0;
         }
 
-        #app-bootstrap .referral-badge {
+        /* ---------- Ambient / anatomy (decorative) -------------- */
+        #app-bootstrap .bootstrap-ambient {
+            position: absolute;
+            z-index: -1;
+            width: 280px;
+            height: 280px;
+            border-radius: 50%;
+            filter: blur(90px);
+            opacity: .22;
+            pointer-events: none;
+        }
+
+        #app-bootstrap .bootstrap-ambient-one {
+            background: #006cff;
+            top: 15%;
+            left: -190px;
+        }
+
+        #app-bootstrap .bootstrap-ambient-two {
+            background: #00c7f5;
+            right: -200px;
+            top: 43%;
+        }
+
+        #app-bootstrap .bootstrap-anatomy {
+            position: absolute;
+            z-index: -1;
+            color: #087cff;
+            opacity: .07;
+            font-size: 190px;
+            filter: blur(2px);
+            pointer-events: none;
+        }
+
+        #app-bootstrap .bootstrap-anatomy-left {
+            left: -52px;
+            top: 28%;
+        }
+
+        #app-bootstrap .bootstrap-anatomy-right {
+            right: -20px;
+            top: 38%;
+        }
+
+        /* ---------- Stage: fills the viewport box ------------- */
+        #app-bootstrap .bootstrap-stage {
+            width: 100%;
+            max-width: 1120px;
+            min-width: 0;
+            min-height: 0;
+            max-height: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            justify-content: safe center;
+            /* top-align if overflow */
+            align-items: center;
+            gap: clamp(6px, 1.2vh, 20px);
+        }
+
+        #app-bootstrap .bootstrap-stage>* {
+            min-height: 0;
+            min-width: 0;
+        }
+
+        /* ---------- Brand --------------------------------------- */
+        #app-bootstrap .bootstrap-brand {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: clamp(9px, 1.4vh, 13px);
+            margin: 0;
+        }
+
+        #app-bootstrap .bootstrap-brand-mark {
+            width: clamp(40px, 5.5vh, 59px);
+            height: clamp(34px, 4.6vh, 50px);
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            filter: drop-shadow(0 0 15px rgba(0, 153, 255, .28));
+        }
+
+        #app-bootstrap .bootstrap-brand-mark img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        #app-bootstrap .bootstrap-brand-name {
+            font-size: clamp(28px, min(9vw, 5vh), 66px);
+            font-weight: 800;
+            letter-spacing: -2.5px;
+            line-height: 1;
+        }
+
+        #app-bootstrap .bootstrap-brand-name span {
+            background: linear-gradient(100deg, #16c9f5, #087aff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        #app-bootstrap .bootstrap-tagline {
+            margin: 0;
+            color: #c2d8f4;
+            font-size: clamp(8px, 1.2vw, 12px);
+            font-weight: 600;
+            letter-spacing: clamp(.08em, .23vw, .23em);
+            text-align: center;
+            white-space: normal;
+            line-height: 1.5;
+        }
+
+        #app-bootstrap .bootstrap-tagline i {
+            font-style: normal;
+            color: #1dbdf5;
+            padding: 0 3px;
+        }
+
+        /* ---------- Hero ---------------------------------------- */
+        #app-bootstrap .bootstrap-hero {
             position: relative;
-            z-index: 1;
-            margin-bottom: 1.2rem;
-            background: rgba(0, 0, 0, 0.55);
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(37, 99, 235, 0.4);
-            border-radius: 30px;
-            padding: 0.5rem 1.5rem;
-            font-size: 0.85rem;
-            color: #60a5fa;
-            letter-spacing: 0.5px;
-            animation: medvixSplashBadgePulse 2s ease-in-out infinite;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-            display: none; /* shown by JS if referral exists */
+            width: 100%;
+            max-width: 650px;
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            margin: 0;
         }
 
-        #app-bootstrap .referral-badge span {
+        #app-bootstrap .bootstrap-heart-wrap {
+            width: clamp(70px, min(38vw, 22vh), 285px);
+            max-width: 100%;
+            aspect-ratio: 1;
+            position: relative;
+            display: grid;
+            place-items: center;
+            margin: 0 auto 4px;
+        }
+
+        #app-bootstrap .bootstrap-heart-art {
+            position: relative;
+            z-index: 2;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: center;
+            filter: drop-shadow(0 0 20px rgba(0, 128, 255, .36));
+            mix-blend-mode: screen;
+            -webkit-mask-image: radial-gradient(ellipse at center, #000 46%, rgba(0, 0, 0, .9) 60%, transparent 76%);
+            mask-image: radial-gradient(ellipse at center, #000 46%, rgba(0, 0, 0, .9) 60%, transparent 76%);
+        }
+
+        #app-bootstrap .bootstrap-heart-orbit {
+            position: absolute;
+            inset: 9%;
+            border: 1px solid rgba(0, 145, 255, .42);
+            border-radius: 50%;
+            box-shadow: 0 0 24px rgba(0, 117, 255, .08);
+            animation: bootstrap-orbit 12s linear infinite;
+        }
+
+        #app-bootstrap .bootstrap-heart-orbit.bootstrap-orbit-two {
+            inset: 1%;
+            border-color: rgba(0, 195, 255, .22);
+            border-style: dashed;
+            animation-direction: reverse;
+            animation-duration: 25s;
+        }
+
+        @keyframes bootstrap-orbit {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* ---------- ECG ------------------------------------------ */
+        #app-bootstrap .bootstrap-ecg {
+            position: absolute;
+            top: 42%;
+            width: clamp(70px, 30%, 260px);
+            height: clamp(35px, 6vh, 72px);
+            opacity: .85;
+            pointer-events: none;
+            overflow: visible;
+            display: block;
+        }
+
+        #app-bootstrap .bootstrap-ecg svg {
+            width: 100%;
+            height: 100%;
+            overflow: visible;
+        }
+
+        #app-bootstrap .bootstrap-ecg .bootstrap-ecg-base {
+            fill: none;
+            stroke: #06c8ff;
+            stroke-width: 2.3;
+            stroke-linejoin: round;
+            stroke-linecap: round;
+            stroke-dasharray: 500;
+            animation: bootstrap-ecg-pulse 3.5s linear infinite;
+            filter: drop-shadow(0 0 5px #00aaff);
+        }
+
+        #app-bootstrap .bootstrap-ecg .bootstrap-ecg-glow {
+            fill: none;
+            stroke: #078bff;
+            stroke-width: 7;
+            stroke-linejoin: round;
+            stroke-linecap: round;
+            stroke-dasharray: 28 472;
+            stroke-dashoffset: 500;
+            animation: bootstrap-ecg-glow-travel 3.5s linear infinite;
+            filter: drop-shadow(0 0 5px #008cff) drop-shadow(0 0 12px #087cff);
+        }
+
+        #app-bootstrap .bootstrap-ecg .bootstrap-ecg-core {
+            fill: none;
+            stroke: #b9f5ff;
+            stroke-width: 2.5;
+            stroke-linejoin: round;
+            stroke-linecap: round;
+            stroke-dasharray: 12 488;
+            stroke-dashoffset: 500;
+            animation: bootstrap-ecg-glow-travel 3.5s linear infinite;
+            filter: drop-shadow(0 0 5px #16dfff) drop-shadow(0 0 10px #087cff);
+        }
+
+        #app-bootstrap .bootstrap-ecg-left {
+            left: 2%;
+            right: auto;
+        }
+
+        #app-bootstrap .bootstrap-ecg-right {
+            right: 2%;
+            left: auto;
+            transform: scaleX(-1);
+        }
+
+        @keyframes bootstrap-ecg-pulse {
+            0% {
+                stroke-dashoffset: 500;
+                opacity: .35;
+            }
+
+            45%,
+            100% {
+                stroke-dashoffset: 0;
+                opacity: 1;
+            }
+        }
+
+        @keyframes bootstrap-ecg-glow-travel {
+            0% {
+                stroke-dashoffset: 500;
+                opacity: 0;
+            }
+
+            12% {
+                opacity: 1;
+            }
+
+            85% {
+                opacity: 1;
+            }
+
+            100% {
+                stroke-dashoffset: 0;
+                opacity: 0;
+            }
+        }
+
+        #app-bootstrap .bootstrap-hero h1 {
+            font-size: clamp(20px, min(5.8vw, 3.6vh), 42px);
+            line-height: 1.15;
+            letter-spacing: -0.8px;
+            margin: 2px 0 0;
+            font-weight: 800;
+            color: #f4f8ff;
+        }
+
+        #app-bootstrap .bootstrap-hero h1 span {
+            color: #16c8f4;
+        }
+
+        #app-bootstrap .bootstrap-hero-copy {
+            font-size: clamp(11px, 3.2vw, 19px);
+            line-height: 1.5;
+            color: #a9c9f2;
+            margin: clamp(4px, 1vh, 15px) 0 0;
+        }
+
+        #app-bootstrap .bootstrap-ellipsis {
+            color: #17c7f4;
+        }
+
+        /* ---------- Progress panel ------------------------------ */
+        #app-bootstrap .bootstrap-progress-panel {
+            width: 100%;
+            max-width: 610px;
+            min-width: 0;
+            min-height: 0;
+            padding: clamp(9px, 1.4vh, 14px) clamp(10px, 2.5vw, 15px) clamp(11px, 1.8vh, 18px);
+            border: 1px solid rgba(30, 132, 255, .28);
+            border-radius: clamp(16px, 2.6vh, 25px);
+            background: linear-gradient(145deg, rgba(14, 31, 55, .88), rgba(4, 13, 27, .82));
+            box-shadow: 0 15px 55px rgba(0, 0, 0, .25), inset 0 1px rgba(255, 255, 255, .04);
+            -webkit-backdrop-filter: blur(14px);
+            backdrop-filter: blur(14px);
+        }
+
+        #app-bootstrap .bootstrap-progress-head {
+            display: flex;
+            align-items: center;
+            gap: clamp(10px, 1.6vh, 16px);
+            padding: clamp(8px, 1.5vh, 13px) clamp(6px, 1.2vw, 10px) clamp(10px, 1.9vh, 17px);
+            border-radius: 19px;
+            background: rgba(255, 255, 255, .035);
+        }
+
+        #app-bootstrap .bootstrap-spinner {
+            width: clamp(24px, 3.6vh, 32px);
+            height: clamp(24px, 3.6vh, 32px);
+            flex: 0 0 auto;
+            border-radius: 50%;
+            background: conic-gradient(from 0deg,
+                    transparent 0deg 12deg,
+                    rgba(8, 124, 255, 0) 12deg,
+                    rgba(8, 124, 255, .12) 30deg,
+                    rgba(8, 124, 255, .35) 65deg,
+                    rgba(8, 124, 255, .65) 100deg,
+                    #087cff 125deg,
+                    #034bba 145deg,
+                    transparent 146deg 360deg);
+            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3.5px));
+            animation: bootstrap-spin 1s linear infinite;
+            filter: drop-shadow(0 0 5px rgba(0, 124, 255, .3));
+        }
+
+        @keyframes bootstrap-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #app-bootstrap .bootstrap-progress-title {
+            flex: 1;
+            min-width: 0;
+        }
+
+        #app-bootstrap .bootstrap-progress-line {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: clamp(6px, 1vh, 12px);
+            font-size: clamp(11px, 1.9vw, 16px);
+        }
+
+        #app-bootstrap .bootstrap-progress-line strong {
+            font-weight: 700;
+            min-width: 0;
+            overflow-wrap: anywhere;
+            color: #f4f8ff;
+        }
+
+        #app-bootstrap .bootstrap-progress-line span {
+            flex: 0 0 auto;
+            color: #c7dcf8;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #app-bootstrap .bootstrap-progress-track {
+            height: clamp(6px, 0.9vh, 8px);
+            border-radius: 20px;
+            background: #1a2b43;
+            overflow: hidden;
+        }
+
+        #app-bootstrap .bootstrap-progress-fill {
+            height: 100%;
+            width: 0;
+            border-radius: 20px;
+            background: linear-gradient(90deg, #09c7f4, #087aff);
+            box-shadow: 0 0 13px rgba(0, 156, 255, .5);
+            /* The RAF animator in scripts/app.js drives width every frame.
+       A CSS transition on top of that restarts 350 ms each update and
+       leaves the bar visually stuck behind the target. `will-change`
+       hints the compositor for cheap repaints. */
+            will-change: width;
+        }
+
+
+        /* ---------- Task list ------------------------------------ */
+        #app-bootstrap .bootstrap-task-list {
+            display: grid;
+            gap: clamp(6px, 1.1vh, 13px);
+            padding: clamp(10px, 1.8vh, 20px) clamp(6px, 1.2vw, 10px) 4px;
+        }
+
+        #app-bootstrap .bootstrap-task {
+            display: flex;
+            align-items: center;
+            gap: clamp(9px, 1.2vh, 13px);
+            min-width: 0;
+        }
+
+        #app-bootstrap .bootstrap-task-icon {
+            width: clamp(26px, 3.5vh, 33px);
+            height: clamp(26px, 3.5vh, 33px);
+            flex: 0 0 auto;
+            border: 2px solid #315579;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            color: #91b5dc;
+            font-size: clamp(11px, 1.6vh, 13px);
+            font-weight: 700;
+            position: relative;
+        }
+
+        #app-bootstrap .bootstrap-task>div {
+            min-width: 0;
+        }
+
+        #app-bootstrap .bootstrap-task strong,
+        #app-bootstrap .bootstrap-task small {
+            display: block;
+            overflow-wrap: anywhere;
+        }
+
+        #app-bootstrap .bootstrap-task strong {
+            font-size: clamp(10px, 1.6vw, 14px);
+            font-weight: 600;
+            color: #e5f0ff;
+        }
+
+        #app-bootstrap .bootstrap-task small {
+            font-size: clamp(9px, 1.3vw, 12px);
+            margin-top: 2px;
+            color: #91b4df;
+            line-height: 1.35;
+        }
+
+        #app-bootstrap .bootstrap-task.bootstrap-is-done .bootstrap-task-icon {
+            border-color: #18d69b;
+            background: rgba(24, 214, 155, .08);
+            color: #20e0a6;
+            font-size: clamp(14px, 2.2vh, 17px);
+            box-shadow: 0 0 12px rgba(24, 214, 155, .12);
+            animation: none;
+        }
+
+        #app-bootstrap .bootstrap-task.bootstrap-is-active .bootstrap-task-icon {
+            border-color: transparent;
+            color: #1bc6ff;
+            box-shadow: 0 0 13px rgba(0, 140, 255, .20);
+            animation: bootstrap-soft-pulse 1.4s ease-in-out infinite;
+        }
+
+        #app-bootstrap .bootstrap-task.bootstrap-is-active .bootstrap-task-icon::after {
+            content: "";
+            position: absolute;
+            inset: -4px;
+            border-radius: 50%;
+            background: conic-gradient(from 0deg,
+                    transparent 0deg 205deg,
+                    rgba(8, 124, 255, .08) 225deg,
+                    rgba(8, 124, 255, .25) 255deg,
+                    rgba(8, 124, 255, .55) 290deg,
+                    #16c8f4 325deg,
+                    #b9f5ff 345deg,
+                    transparent 350deg 360deg);
+            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+            mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+            animation: bootstrap-task-ring-spin 1s linear infinite;
+            filter: drop-shadow(0 0 4px rgba(0, 145, 255, .55));
+            pointer-events: none;
+        }
+
+        #app-bootstrap .bootstrap-task.bootstrap-is-done .bootstrap-task-icon::after {
+            display: none;
+        }
+
+        #app-bootstrap .bootstrap-task.bootstrap-is-active strong {
+            color: #fff;
+        }
+
+        @keyframes bootstrap-task-ring-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes bootstrap-soft-pulse {
+            50% {
+                box-shadow: 0 0 20px rgba(0, 140, 255, .5);
+            }
+        }
+
+        /* ---------- Footer (Great things take a little time) --- */
+        #app-bootstrap .bootstrap-footer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: clamp(8px, 1.4vh, 15px);
+            margin: 0;
+            padding-top: clamp(2px, 0.8vh, 10px);
+            color: #32a9ff;
+            font-size: clamp(9px, 1.5vw, 14px);
+            text-align: center;
+            width: 100%;
+            min-width: 0;
+        }
+
+        #app-bootstrap .bootstrap-footer p {
+            margin: 0;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        #app-bootstrap .bootstrap-footer>span {
+            width: clamp(25px, 7vw, 80px);
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #087cff);
+            flex: 0 1 80px;
+            min-width: 20px;
+        }
+
+        #app-bootstrap .bootstrap-footer>span:last-child {
+            transform: rotate(180deg);
+        }
+
+        /* ---------- Referral badge (JS-managed) ---------------- */
+        #app-bootstrap .bootstrap-referral-badge {
+            position: absolute;
+            top: max(16px, env(safe-area-inset-top, 0px));
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2;
+            background: rgba(0, 0, 0, .55);
+            -webkit-backdrop-filter: blur(4px);
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(37, 99, 235, .4);
+            border-radius: 30px;
+            padding: .4rem 1.2rem;
+            font-size: .8rem;
+            color: #60a5fa;
+            letter-spacing: .5px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, .3);
+            animation: bootstrap-referral-pulse 2s ease-in-out infinite;
+            display: none;
+        }
+
+        #app-bootstrap .bootstrap-referral-badge span {
             font-weight: 600;
             color: #fff;
         }
 
-        @keyframes medvixSplashBadgePulse {
-            0%, 100% { opacity: 0.8; transform: scale(1); }
-            50%      { opacity: 1;   transform: scale(1.04); }
+        @keyframes bootstrap-referral-pulse {
+
+            0%,
+            100% {
+                opacity: .8;
+                transform: translateX(-50%) scale(1);
+            }
+
+            50% {
+                opacity: 1;
+                transform: translateX(-50%) scale(1.04);
+            }
         }
 
-        #app-bootstrap .loading-section {
+        /* =========================================================
+           NOTIFICATION RATIONALE OVERLAY — HIDDEN BY DEFAULT
+           ========================================================= */
+        .bootstrap-permission-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 99990;
+            display: grid;
+            place-items: center;
+            padding:
+                max(18px, env(safe-area-inset-top, 0px)) 16px max(18px, env(safe-area-inset-bottom, 0px));
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        .bootstrap-permission-overlay[hidden] {
+            display: none;
+        }
+
+        .bootstrap-permission-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 4, 13, .68);
+            -webkit-backdrop-filter: blur(9px);
+            backdrop-filter: blur(9px);
+        }
+
+        .bootstrap-permission-card {
             position: relative;
-            z-index: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 0.8rem;
-            width: 100%;
-            max-width: 280px;
-            margin-bottom: 1.5rem;
-        }
-
-        #app-bootstrap .spinner {
-            width: 36px;
-            height: 36px;
-            border: 3px solid rgba(255, 255, 255, 0.15);
-            border-top-color: #60a5fa;
-            border-radius: 50%;
-            animation: medvixSplashSpin 0.8s linear infinite;
-        }
-
-        @keyframes medvixSplashSpin {
-            to { transform: rotate(360deg); }
-        }
-
-        #app-bootstrap .progress-track {
-            width: 100%;
-            height: 12px;
-            background: rgba(255, 255, 255, 0.15);
-            border-radius: 9999px;
-            overflow: hidden;
-            position: relative;
-            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
-        }
-
-        #app-bootstrap .progress-fill {
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(90deg, #2563eb, #60a5fa, #2563eb);
-            background-size: 200% 100%;
-            border-radius: 9999px;
-            animation: medvixSplashProgressShimmer 1.5s linear infinite;
-            transition: width 0.3s ease;
-            box-shadow: 0 0 12px rgba(96, 165, 250, 0.4);
-        }
-
-        @keyframes medvixSplashProgressShimmer {
-            0%   { background-position: 0% 0%; }
-            100% { background-position: 200% 0%; }
-        }
-
-        #app-bootstrap .loading-text {
-            font-size: 0.85rem;
-            color: rgba(255, 255, 255, 0.7);
-            font-weight: 300;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
-            min-height: 1.5em;
-        }
-
-        #app-bootstrap .loading-text .dot {
-            display: inline-block;
-            animation: medvixSplashDotPulse 1.4s ease-in-out infinite;
-        }
-        #app-bootstrap .loading-text .dot:nth-child(2) { animation-delay: 0.2s; }
-        #app-bootstrap .loading-text .dot:nth-child(3) { animation-delay: 0.4s; }
-
-        @keyframes medvixSplashDotPulse {
-            0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-            30%           { opacity: 1;   transform: translateY(-4px); }
-        }
-
-        #app-bootstrap .version-info {
-            position: relative;
-            z-index: 1;
+            width: min(100%, 650px);
+            max-height: calc(100svh - 36px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding: 32px clamp(22px, 4vw, 40px) 27px;
+            border: 1px solid rgba(21, 126, 232, .62);
+            border-radius: clamp(25px, 4vw, 42px);
             text-align: center;
-            font-size: 0.7rem;
-            color: rgba(255, 255, 255, 0.4);
-            letter-spacing: 1px;
-            font-weight: 300;
-            text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
-            margin-top: 0.25rem;
+            background:
+                radial-gradient(ellipse at 50% 0%, rgba(8, 63, 119, .28), transparent 45%),
+                linear-gradient(155deg, #07172e 0%, #061329 62%, #06152b 100%);
+            box-shadow:
+                0 0 0 1px rgba(1, 110, 255, .12),
+                0 25px 90px rgba(0, 0, 0, .7),
+                inset 0 1px rgba(255, 255, 255, .035);
+            animation: bootstrap-notification-card-in .3s ease-out;
+            color: #f4f8ff;
         }
 
-        #app-root {
-            /* Body already carries padding-top: env(safe-area-inset-top)
-               from common.css to keep content clear of the status bar.
-               Because of that, a naive min-height: 100vh here would
-               extend the content by exactly the safe-area inset and
-               produce a scrollbar on short pages. Subtracting the inset
-               makes the app-root match the body's content box on every
-               device and viewport orientation.
+        @keyframes bootstrap-notification-card-in {
+            from {
+                opacity: 0;
+                transform: translateY(14px) scale(.985);
+            }
 
-               The dvh variant is preferred where supported: it tracks
-               the actual visible viewport as browser chrome collapses
-               and expands, which vh does not. Older WebViews fall back
-               to the vh line above it. */
-            min-height: calc(100vh  - env(safe-area-inset-top, 0px));
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .bootstrap-permission-card .bootstrap-close-button {
+            position: absolute;
+            right: 18px;
+            top: 14px;
+            z-index: 2;
+            border: 0;
+            background: transparent;
+            color: #7196c2;
+            font-size: 29px;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-bell {
+            width: 104px;
+            height: 104px;
+            border-radius: 50%;
+            margin: 0 auto 17px;
+            border: 3px solid #087cda;
+            display: grid;
+            place-items: center;
+            color: #fff;
+            background: radial-gradient(circle, #0a3970, #071a34 70%);
+            box-shadow:
+                0 0 0 8px rgba(0, 123, 255, .035),
+                0 0 25px rgba(0, 132, 255, .18),
+                inset 0 0 18px rgba(0, 141, 255, .14);
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-bell svg {
+            width: 51px;
+            height: 51px;
+            filter: drop-shadow(0 0 9px rgba(255, 255, 255, .16));
+        }
+
+        .bootstrap-permission-card .bootstrap-eyebrow {
+            margin: 0 0 8px;
+            color: #09c4ee;
+            font-size: 15px;
+            font-weight: 750;
+            letter-spacing: .29em;
+        }
+
+        .bootstrap-permission-card h2 {
+            font-size: clamp(23px, 3.1vw, 32px);
+            line-height: 1.2;
+            letter-spacing: -.025em;
+            margin: 0;
+            font-weight: 760;
+            color: #f4f8ff;
+        }
+
+        .bootstrap-permission-card h2 span {
+            color: #08bff0;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-copy {
+            max-width: 540px;
+            margin: 13px auto 21px;
+            color: #c0d3ed;
+            font-size: clamp(15px, 2vw, 19px);
+            line-height: 1.48;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-benefits {
+            border: 1px solid rgba(102, 151, 210, .22);
+            border-radius: 23px;
+            padding: 5px 24px;
+            margin: 0 auto 24px;
+            text-align: left;
+            background: rgba(3, 16, 34, .22);
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-benefits>div {
+            display: flex;
+            align-items: center;
+            gap: 17px;
+            padding: 14px 5px;
+            min-height: 85px;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-benefits>div+div {
+            border-top: 1px solid rgba(105, 151, 209, .2);
+        }
+
+        .bootstrap-permission-card .bootstrap-benefit-icon {
+            width: 58px;
+            height: 58px;
+            flex: 0 0 58px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background: radial-gradient(circle at 35% 25%, #0c6dbb, #04305b 75%);
+            box-shadow:
+                inset 0 0 15px rgba(0, 206, 255, .18),
+                0 0 15px rgba(0, 132, 255, .08);
+        }
+
+        .bootstrap-permission-card .bootstrap-benefit-icon svg {
+            width: 34px;
+            height: 34px;
+            fill: none;
+            stroke: #12d8f4;
+            stroke-width: 2.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            filter: drop-shadow(0 0 4px rgba(0, 196, 255, .3));
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-benefits p {
+            margin: 0;
+            min-width: 0;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-benefits b {
+            display: block;
+            font-size: 18px;
+            font-weight: 680;
+            color: #f4f7ff;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-benefits small {
+            display: block;
+            margin-top: 4px;
+            font-size: 15px;
+            line-height: 1.35;
+            color: #a9c4e7;
+        }
+
+        .bootstrap-permission-card .bootstrap-primary-button {
+            width: 100%;
+            min-height: 68px;
+            border: 0;
+            border-radius: 50px;
+            background: linear-gradient(100deg, #08c9e8, #087cff);
+            color: #03162e;
+            font-size: 20px;
+            font-weight: 760;
+            box-shadow:
+                0 8px 28px rgba(0, 123, 255, .2),
+                inset 0 1px rgba(255, 255, 255, .22);
+            cursor: pointer;
+            transition: transform .16s, filter .16s;
+            font-family: inherit;
+        }
+
+        .bootstrap-permission-card .bootstrap-primary-button:hover {
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+
+        .bootstrap-permission-card .bootstrap-primary-button:active {
+            transform: scale(.99);
+        }
+
+        .bootstrap-permission-card .bootstrap-text-button {
+            display: block;
+            margin: 13px auto;
+            padding: 10px 25px;
+            border: 0;
+            background: transparent;
+            color: #08aaf0;
+            font-size: 19px;
+            font-weight: 700;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-footnote {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 11px;
+            border-top: 1px solid rgba(105, 151, 209, .16);
+            padding-top: 17px;
+            color: #a8c4e9;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .bootstrap-permission-card .bootstrap-permission-footnote svg {
+            width: 21px;
+            height: 21px;
+            flex: 0 0 21px;
+            fill: none;
+            stroke: #75a8df;
+            stroke-width: 1.8;
+        }
+
+        /* ---------- Notification overlay — phone ------------ */
+        @media (max-width: 600px) {
+            .bootstrap-permission-overlay {
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+
+            .bootstrap-permission-card {
+                padding: 27px 19px 22px;
+                border-radius: 29px;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-bell {
+                width: 82px;
+                height: 82px;
+                margin-bottom: 14px;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-bell svg {
+                width: 42px;
+                height: 42px;
+            }
+
+            .bootstrap-permission-card .bootstrap-eyebrow {
+                font-size: 12px;
+                letter-spacing: .25em;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-copy {
+                margin: 10px auto 16px;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-benefits {
+                padding: 3px 13px;
+                margin-bottom: 18px;
+                border-radius: 19px;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-benefits>div {
+                gap: 12px;
+                min-height: 72px;
+                padding: 11px 2px;
+            }
+
+            .bootstrap-permission-card .bootstrap-benefit-icon {
+                width: 49px;
+                height: 49px;
+                flex-basis: 49px;
+            }
+
+            .bootstrap-permission-card .bootstrap-benefit-icon svg {
+                width: 29px;
+                height: 29px;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-benefits b {
+                font-size: 16px;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-benefits small {
+                font-size: 13px;
+            }
+
+            .bootstrap-permission-card .bootstrap-primary-button {
+                min-height: 57px;
+                font-size: 17px;
+            }
+
+            .bootstrap-permission-card .bootstrap-text-button {
+                font-size: 17px;
+                margin: 9px auto;
+            }
+
+            .bootstrap-permission-card .bootstrap-permission-footnote {
+                font-size: 12px;
+                padding-top: 13px;
+            }
+        }
+
+        /* ============================================================
+           SPLASH — HEIGHT-TIER COMPACTION
+           ------------------------------------------------------------
+           Four tiers ensure the full stack (brand → tagline → hero →
+           progress → footer) always fits within 100svh on Android
+           phones. Breakpoints chosen to match the height bands most
+           common on real devices. Everything still scales on taller
+           viewports via the base vh-clamps above.
+           ============================================================ */
+
+        /* ---- Tier 1: ≤ 800px height (large phones, small tabs) -- */
+        @media (max-height: 800px) {
+            #app-bootstrap {
+                padding-top: max(10px, env(safe-area-inset-top, 0px));
+                padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+            }
+
+            #app-bootstrap .bootstrap-stage {
+                gap: clamp(5px, 1vh, 14px);
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(70px, min(32vw, 20vh), 220px);
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(19px, min(5.2vw, 3.2vh), 34px);
+            }
+
+            #app-bootstrap .bootstrap-hero-copy {
+                font-size: clamp(10px, 2.8vw, 15px);
+                margin-top: clamp(3px, 0.8vh, 10px);
+            }
+
+            #app-bootstrap .bootstrap-task-list {
+                gap: clamp(5px, 0.9vh, 10px);
+                padding: clamp(8px, 1.5vh, 15px) 8px 3px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                padding: clamp(8px, 1.2vh, 12px) 13px clamp(10px, 1.5vh, 15px);
+            }
+
+            #app-bootstrap .bootstrap-progress-head {
+                padding: clamp(7px, 1.2vh, 11px) 8px clamp(9px, 1.5vh, 14px);
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                padding-top: clamp(2px, 0.6vh, 6px);
+            }
+        }
+
+        /* ---- Tier 2: ≤ 700px portrait ------------------------- */
+        @media (max-height: 700px) and (orientation: portrait) {
+            #app-bootstrap {
+                padding: max(8px, env(safe-area-inset-top, 0px)) 12px max(8px, env(safe-area-inset-bottom, 0px)) 12px;
+            }
+
+            #app-bootstrap .bootstrap-stage {
+                gap: 6px;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(60px, 15vh, 130px);
+            }
+
+            #app-bootstrap .bootstrap-brand-mark {
+                width: 38px;
+                height: 32px;
+            }
+
+            #app-bootstrap .bootstrap-brand-name {
+                font-size: clamp(28px, min(8vw, 4.5vh), 46px);
+                letter-spacing: -2px;
+            }
+
+            #app-bootstrap .bootstrap-tagline {
+                font-size: 8px;
+                letter-spacing: .08em;
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(17px, 4.3vw, 24px);
+                line-height: 1.12;
+            }
+
+            #app-bootstrap .bootstrap-hero-copy {
+                font-size: 10.5px;
+                margin-top: 4px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                padding: 8px 10px 10px;
+                border-radius: 16px;
+            }
+
+            #app-bootstrap .bootstrap-progress-head {
+                padding: 7px 6px 9px;
+                gap: 9px;
+            }
+
+            #app-bootstrap .bootstrap-spinner {
+                width: 24px;
+                height: 24px;
+            }
+
+            #app-bootstrap .bootstrap-progress-line {
+                margin-bottom: 5px;
+                font-size: 11px;
+            }
+
+            #app-bootstrap .bootstrap-progress-track {
+                height: 6px;
+            }
+
+            #app-bootstrap .bootstrap-task-list {
+                gap: 5px;
+                padding: 7px 5px 2px;
+            }
+
+            #app-bootstrap .bootstrap-task {
+                gap: 9px;
+            }
+
+            #app-bootstrap .bootstrap-task-icon {
+                width: 24px;
+                height: 24px;
+                font-size: 10px;
+                border-width: 1.5px;
+            }
+
+            #app-bootstrap .bootstrap-task strong {
+                font-size: 10.5px;
+            }
+
+            #app-bootstrap .bootstrap-task small {
+                font-size: 9px;
+                margin-top: 1px;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                padding-top: 2px;
+                font-size: 10px;
+                gap: 8px;
+            }
+
+            #app-bootstrap .bootstrap-footer>span {
+                min-width: 16px;
+                width: clamp(18px, 5vw, 50px);
+            }
+
+            #app-bootstrap .bootstrap-ecg {
+                height: 32px;
+            }
+        }
+
+        /* ---- Tier 3: ≤ 600px portrait (small phones) ---------- */
+        @media (max-height: 600px) and (orientation: portrait) {
+            #app-bootstrap {
+                padding: 8px 10px;
+            }
+
+            #app-bootstrap .bootstrap-stage {
+                gap: 5px;
+            }
+
+            #app-bootstrap .bootstrap-tagline {
+                display: none;
+            }
+
+            #app-bootstrap .bootstrap-hero-copy {
+                display: none;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(52px, 12vh, 95px);
+            }
+
+            #app-bootstrap .bootstrap-brand-mark {
+                width: 32px;
+                height: 27px;
+            }
+
+            #app-bootstrap .bootstrap-brand-name {
+                font-size: clamp(24px, min(7vw, 4vh), 38px);
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(15px, 3.8vw, 19px);
+                margin-top: 1px;
+            }
+
+            #app-bootstrap .bootstrap-task small {
+                display: none;
+            }
+
+            #app-bootstrap .bootstrap-task-list {
+                gap: 4px;
+                padding: 6px 4px 2px;
+            }
+
+            #app-bootstrap .bootstrap-task-icon {
+                width: 21px;
+                height: 21px;
+                font-size: 9px;
+            }
+
+            #app-bootstrap .bootstrap-task strong {
+                font-size: 10px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                padding: 6px 8px 8px;
+                border-radius: 13px;
+            }
+
+            #app-bootstrap .bootstrap-progress-head {
+                padding: 6px 4px 8px;
+                gap: 8px;
+            }
+
+            #app-bootstrap .bootstrap-spinner {
+                width: 22px;
+                height: 22px;
+            }
+
+            #app-bootstrap .bootstrap-progress-line {
+                margin-bottom: 4px;
+                font-size: 10px;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                font-size: 9px;
+                padding-top: 1px;
+            }
+
+            #app-bootstrap .bootstrap-ecg {
+                height: 28px;
+            }
+        }
+
+        /* ---- Small width (≤ 380px) ---------------------------- */
+        @media (max-width: 380px) {
+            #app-bootstrap {
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+
+            #app-bootstrap .bootstrap-stage {
+                gap: clamp(5px, 1.1vh, 11px);
+            }
+
+            #app-bootstrap .bootstrap-brand {
+                gap: 8px;
+            }
+
+            #app-bootstrap .bootstrap-brand-mark {
+                width: 40px;
+                height: 34px;
+            }
+
+            #app-bootstrap .bootstrap-brand-name {
+                font-size: clamp(28px, 10vw, 42px);
+                letter-spacing: -2px;
+            }
+
+            #app-bootstrap .bootstrap-tagline {
+                letter-spacing: .08em;
+                font-size: 8px;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(70px, 32vw, 155px);
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(17px, 5.5vw, 26px);
+            }
+
+            #app-bootstrap .bootstrap-hero-copy {
+                font-size: 11px;
+                margin-top: 5px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                padding: 9px;
+                border-radius: 18px;
+            }
+
+            #app-bootstrap .bootstrap-progress-head {
+                gap: 9px;
+                padding: 8px 5px 11px;
+            }
+
+            #app-bootstrap .bootstrap-spinner {
+                width: 26px;
+                height: 26px;
+            }
+
+            #app-bootstrap .bootstrap-task-list {
+                gap: 8px;
+                padding: 11px 4px 3px;
+            }
+
+            #app-bootstrap .bootstrap-task {
+                gap: 8px;
+            }
+
+            #app-bootstrap .bootstrap-task-icon {
+                width: 27px;
+                height: 27px;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                padding-top: 2px;
+                gap: 7px;
+            }
+        }
+
+        /* ---- Landscape phones (≤ 560px height) ---------------- */
+        @media (max-height: 560px) and (orientation: landscape) {
+            #app-bootstrap {
+                padding-top: 8px;
+                padding-bottom: 8px;
+            }
+
+            #app-bootstrap .bootstrap-stage {
+                max-width: 980px;
+                display: grid;
+                grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+                grid-template-rows: auto auto 1fr auto;
+                justify-items: center;
+                align-items: center;
+                column-gap: 24px;
+                row-gap: 6px;
+            }
+
+            #app-bootstrap .bootstrap-brand,
+            #app-bootstrap .bootstrap-tagline,
+            #app-bootstrap .bootstrap-footer {
+                grid-column: 1 / -1;
+            }
+
+            #app-bootstrap .bootstrap-hero {
+                grid-column: 1;
+                grid-row: 3;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                grid-column: 2;
+                grid-row: 3;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                grid-row: 4;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(85px, 22vh, 160px);
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(16px, 3.4vh, 24px);
+            }
+
+            #app-bootstrap .bootstrap-hero-copy {
+                font-size: 10px;
+                margin-top: 3px;
+            }
+
+            #app-bootstrap .bootstrap-ecg {
+                display: block;
+                top: 38%;
+                width: 26%;
+                height: 34px;
+            }
+
+            #app-bootstrap .bootstrap-task-list {
+                gap: 5px;
+                padding-top: 7px;
+            }
+
+            #app-bootstrap .bootstrap-task-icon {
+                width: 24px;
+                height: 24px;
+            }
+
+            #app-bootstrap .bootstrap-task small {
+                font-size: 9px;
+            }
+
+            #app-bootstrap .bootstrap-task strong {
+                font-size: 10.5px;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                padding-top: 2px;
+            }
+        }
+
+        /* ---- Tablet / desktop (2 columns) ---------------------- */
+        @media (min-width: 700px) and (min-height: 561px) {
+            #app-bootstrap .bootstrap-stage {
+                max-width: 900px;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-rows: auto auto 1fr auto;
+                justify-items: center;
+                align-items: center;
+                column-gap: clamp(24px, 5vw, 58px);
+                row-gap: 16px;
+            }
+
+            #app-bootstrap .bootstrap-brand,
+            #app-bootstrap .bootstrap-tagline,
+            #app-bootstrap .bootstrap-footer {
+                grid-column: 1 / -1;
+            }
+
+            #app-bootstrap .bootstrap-hero {
+                grid-column: 1;
+                grid-row: 3;
+                max-width: 440px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                grid-column: 2;
+                grid-row: 3;
+                max-width: 440px;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                grid-row: 4;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(160px, 22vw, 250px);
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(24px, 3.2vw, 34px);
+            }
+        }
+
+        @media (min-width: 1100px) and (min-height: 561px) {
+            #app-bootstrap .bootstrap-stage {
+                max-width: 1080px;
+                column-gap: 65px;
+                row-gap: 20px;
+            }
+
+            #app-bootstrap .bootstrap-hero {
+                max-width: 500px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                max-width: 480px;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: clamp(220px, 20vw, 300px);
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: clamp(32px, 2.8vw, 40px);
+            }
+        }
+
+        @media (min-width: 1600px) and (min-height: 561px) {
+            #app-bootstrap .bootstrap-stage {
+                max-width: 1160px;
+                column-gap: 90px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                max-width: 500px;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: 320px;
+            }
+        }
+
+        /* ---- Ultra-narrow (≤ 280px) --------------------------- */
+        @media (max-width: 280px) {
+            #app-bootstrap {
+                padding: 6px;
+            }
+
+            #app-bootstrap .bootstrap-stage {
+                gap: 5px;
+            }
+
+            #app-bootstrap .bootstrap-brand-mark {
+                width: 28px;
+                height: 24px;
+            }
+
+            #app-bootstrap .bootstrap-brand-name {
+                font-size: 22px;
+                letter-spacing: -1px;
+            }
+
+            #app-bootstrap .bootstrap-tagline,
+            #app-bootstrap .bootstrap-anatomy,
+            #app-bootstrap .bootstrap-task-list {
+                display: none;
+            }
+
+            #app-bootstrap .bootstrap-hero-copy {
+                font-size: 9px;
+            }
+
+            #app-bootstrap .bootstrap-heart-wrap {
+                width: 80px;
+            }
+
+            #app-bootstrap .bootstrap-hero h1 {
+                font-size: 14px;
+            }
+
+            #app-bootstrap .bootstrap-progress-panel {
+                padding: 6px;
+                border-radius: 12px;
+            }
+
+            #app-bootstrap .bootstrap-progress-head {
+                gap: 6px;
+                padding: 5px;
+            }
+
+            #app-bootstrap .bootstrap-spinner {
+                width: 20px;
+                height: 20px;
+            }
+
+            #app-bootstrap .bootstrap-progress-line {
+                font-size: 9px;
+                margin-bottom: 4px;
+            }
+
+            #app-bootstrap .bootstrap-progress-track {
+                height: 5px;
+            }
+
+            #app-bootstrap .bootstrap-footer {
+                font-size: 8px;
+                padding-top: 0;
+            }
+
+            #app-bootstrap .bootstrap-ecg {
+                display: none;
+            }
+
+            .bootstrap-permission-overlay {
+                display: none !important;
+            }
+        }
+
+        /* ---- Motion preferences -------------------------------- */
+        @media (prefers-reduced-motion: reduce) {
+
+            #app-bootstrap *,
+            #app-bootstrap *::before,
+            #app-bootstrap *::after,
+            .bootstrap-permission-overlay *,
+            .bootstrap-permission-overlay *::before,
+            .bootstrap-permission-overlay *::after {
+                animation-duration: .01ms !important;
+                animation-iteration-count: 1 !important;
+                scroll-behavior: auto !important;
+                transition: none !important;
+            }
+        }
+
+        /* ---------- App root (unchanged) ----------------------- */
+        #app-root {
+            min-height: calc(100vh - env(safe-area-inset-top, 0px));
             min-height: calc(100dvh - env(safe-area-inset-top, 0px));
             position: relative;
             z-index: 1;
         }
-
-        .app-ready #app-bootstrap {
-            opacity: 0 !important;
-            pointer-events: none;
-        }
     </style>
 
     <!-- ============================================================
-         ICON COLOR SYSTEM — semantic palette for Font Awesome icons
-         (kept as inline fallback; canonical rules live in common.css §23b)
+         ICON COLOR SYSTEM — unchanged
          ============================================================ -->
     <style id="medvix-icon-colors">
         .icon-btn {
@@ -253,7 +1609,9 @@
             pointer-events: none;
         }
 
-        [data-tooltip] { position: relative; }
+        [data-tooltip] {
+            position: relative;
+        }
 
         [data-tooltip]:hover::after {
             content: attr(data-tooltip);
@@ -274,7 +1632,7 @@
     </style>
 
     <!-- ============================================================
-         GOOGLE PLAY IN-APP UPDATE — FLEXIBLE RESTART BANNER
+         GOOGLE PLAY IN-APP UPDATE BANNER — unchanged
          ============================================================ -->
     <style id="medvix-update-banner-css">
         #play-update-banner {
@@ -282,7 +1640,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            z-index: 9998; /* below splash (99999), above app-root (1) */
+            z-index: 9998;
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -357,34 +1715,210 @@
 <body>
 
     <!-- ============================================================
-         TEMPORARY SPLASH SCREEN
+         BOOTSTRAP SPLASH (fit-to-viewport edition)
+         ------------------------------------------------------------
+         Preserved IDs (referenced by scripts/app.js):
+           • #app-bootstrap   • #progressFill
+           • #referralBadge   • #refBadgeCode
+         New IDs (driven by the extended updateProgress()):
+           • #progressValue   • #progressBar   • #statusTitle
+           • .bootstrap-task  (data-task attr)
+         Header icon is now the actual MedVix logo PNG.
          ============================================================ -->
     <div id="app-bootstrap" aria-live="polite" aria-label="Loading MedVix">
-        <div class="referral-badge" id="referralBadge">
+        <div class="bootstrap-ambient bootstrap-ambient-one" aria-hidden="true"></div>
+        <div class="bootstrap-ambient bootstrap-ambient-two" aria-hidden="true"></div>
+        <div class="bootstrap-anatomy bootstrap-anatomy-left" aria-hidden="true">✧</div>
+        <div class="bootstrap-anatomy bootstrap-anatomy-right" aria-hidden="true">＋</div>
+
+        <div class="bootstrap-referral-badge" id="referralBadge">
             🎯 Referral: <span id="refBadgeCode">—</span>
         </div>
 
-        <div class="loading-section" id="loadingSection">
-            <div class="spinner" id="spinner"></div>
-            <div class="progress-track">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-            <div class="loading-text" id="loadingText">
-                Loading<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
-            </div>
-        </div>
+        <div class="bootstrap-stage">
+            <header class="bootstrap-brand">
+                <div class="bootstrap-brand-mark" aria-hidden="true">
+                    <img src="/assets/images/logo.png" alt="" />
+                </div>
+                <div class="bootstrap-brand-name">Med<span>Vix</span></div>
+            </header>
 
-        <div class="version-info">version 1.2.0</div>
+            <p class="bootstrap-tagline">LEARN <i>·</i> PRACTICE <i>·</i> CONNECT <i>·</i> GROW <i>·</i> ACHIEVE</p>
+
+            <section class="bootstrap-hero" aria-label="Welcome">
+                <div class="bootstrap-ecg bootstrap-ecg-left" aria-hidden="true">
+                    <svg viewBox="0 0 360 100" preserveAspectRatio="none">
+                        <path class="bootstrap-ecg-base" d="M0 53H105l12-1 9-15 12 31 13-68 15 83 13-37 12 7h169" />
+                        <path class="bootstrap-ecg-glow" d="M0 53H105l12-1 9-15 12 31 13-68 15 83 13-37 12 7h169" />
+                        <path class="bootstrap-ecg-core" d="M0 53H105l12-1 9-15 12 31 13-68 15 83 13-37 12 7h169" />
+                    </svg>
+                </div>
+                <div class="bootstrap-ecg bootstrap-ecg-right" aria-hidden="true">
+                    <svg viewBox="0 0 360 100" preserveAspectRatio="none">
+                        <path class="bootstrap-ecg-base" d="M0 53H105l12-1 9-15 12 31 13-68 15 83 13-37 12 7h169" />
+                        <path class="bootstrap-ecg-glow" d="M0 53H105l12-1 9-15 12 31 13-68 15 83 13-37 12 7h169" />
+                        <path class="bootstrap-ecg-core" d="M0 53H105l12-1 9-15 12 31 13-68 15 83 13-37 12 7h169" />
+                    </svg>
+                </div>
+
+                <div class="bootstrap-heart-wrap">
+                    <div class="bootstrap-heart-orbit bootstrap-orbit-one"></div>
+                    <div class="bootstrap-heart-orbit bootstrap-orbit-two"></div>
+                    <img class="bootstrap-heart-art" src="/assets/images/medvix-heart.png" alt=""
+                        onerror="this.style.display='none'" />
+                </div>
+
+                <h1>Your Medical Journey<br><span>Starts Here</span></h1>
+                <p class="bootstrap-hero-copy">Preparing the best learning experience<br
+                        class="bootstrap-desktop-break"> for you<span class="bootstrap-ellipsis">...</span></p>
+            </section>
+
+            <section class="bootstrap-progress-panel" aria-label="Bootstrap progress" aria-live="polite">
+                <div class="bootstrap-progress-head">
+                    <div class="bootstrap-spinner" aria-hidden="true"></div>
+                    <div class="bootstrap-progress-title">
+                        <div class="bootstrap-progress-line">
+                            <strong id="statusTitle">Initializing MedVix...</strong>
+                            <span id="progressValue">0%</span>
+                        </div>
+                        <div class="bootstrap-progress-track" role="progressbar" aria-label="Bootstrap progress"
+                            aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressBar">
+                            <div class="bootstrap-progress-fill" id="progressFill"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bootstrap-task-list">
+                    <div class="bootstrap-task" data-task="services" data-state="pending">
+                        <span class="bootstrap-task-icon" aria-hidden="true">1</span>
+                        <div><strong>Loading core services</strong><small>App framework and modules</small></div>
+                    </div>
+                    <div class="bootstrap-task" data-task="resources" data-state="pending">
+                        <span class="bootstrap-task-icon" aria-hidden="true">2</span>
+                        <div><strong>Synchronizing resources</strong><small>Notes, textbooks, past papers and
+                                more</small></div>
+                    </div>
+                    <div class="bootstrap-task" data-task="connection" data-state="pending">
+                        <span class="bootstrap-task-icon" aria-hidden="true">3</span>
+                        <div><strong>Checking connectivity</strong><small>Internet and server status</small></div>
+                    </div>
+                    <div class="bootstrap-task" data-task="environment" data-state="pending">
+                        <span class="bootstrap-task-icon" aria-hidden="true">4</span>
+                        <div><strong>Preparing your learning environment</strong><small>Personalizing your
+                                experience</small></div>
+                    </div>
+                </div>
+            </section>
+
+            <footer class="bootstrap-footer">
+                <span></span>
+                <p>Great things take a little time...</p>
+                <span></span>
+            </footer>
+        </div>
     </div>
 
     <!-- ============================================================
-         SPA APPLICATION HOST
+         NOTIFICATION RATIONALE OVERLAY — HIDDEN BY DEFAULT
+         ============================================================ -->
+    <section class="bootstrap-permission-overlay" id="notificationOverlay" hidden aria-modal="true" role="dialog"
+        aria-labelledby="permissionTitle" aria-describedby="permissionDescription">
+        <div class="bootstrap-permission-backdrop"></div>
+        <div class="bootstrap-permission-card">
+            <button class="bootstrap-close-button" id="closePermission" type="button" aria-label="Close">×</button>
+
+            <div class="bootstrap-permission-bell" aria-hidden="true">
+                <svg viewBox="0 0 48 48">
+                    <path
+                        d="M24 5c-6 0-10 4.8-10 11v6.2c0 3.1-1.2 5.4-3.5 7.8-.9.9-.3 2.5 1 2.5h25c1.3 0 1.9-1.6 1-2.5-2.3-2.4-3.5-4.7-3.5-7.8V16c0-6.2-4-11-10-11Zm-5 32a5 5 0 0 0 10 0H19Z"
+                        fill="currentColor" />
+                </svg>
+            </div>
+
+            <p class="bootstrap-eyebrow">STAY IN THE LOOP</p>
+            <h2 id="permissionTitle">Let <span>MedVix</span> keep you updated</h2>
+            <p class="bootstrap-permission-copy" id="permissionDescription">
+                Get important announcements, new resources, exam reminders and updates directly on your device.
+            </p>
+
+            <div class="bootstrap-permission-benefits">
+                <div>
+                    <span class="bootstrap-benefit-icon">
+                        <svg viewBox="0 0 48 48">
+                            <path
+                                d="M6 11c7-3 13-2 18 2v26c-5-4-11-5-18-2V11Zm36 0c-7-3-13-2-18 2v26c5-4 11-5 18-2V11Z" />
+                            <path d="M24 13v26" />
+                        </svg>
+                    </span>
+                    <p><b>New resources</b><small>Know when notes and past papers arrive.</small></p>
+                </div>
+                <div>
+                    <span class="bootstrap-benefit-icon">
+                        <svg viewBox="0 0 48 48">
+                            <rect x="7" y="11" width="34" height="30" rx="4" />
+                            <path d="M15 6v10M33 6v10M7 20h34M15 27h5m7 0h5m-17 7h5m7 0h5" />
+                        </svg>
+                    </span>
+                    <p><b>Exam reminders</b><small>Stay on top of important academic dates.</small></p>
+                </div>
+                <div>
+                    <span class="bootstrap-benefit-icon">
+                        <svg viewBox="0 0 48 48">
+                            <defs>
+                                <linearGradient id="bootstrap-announcementGradient" x1="7" y1="10" x2="39" y2="39"
+                                    gradientUnits="userSpaceOnUse">
+                                    <stop offset="0%" stop-color="#42E4FF" />
+                                    <stop offset="100%" stop-color="#0875FF" />
+                                </linearGradient>
+                            </defs>
+                            <path d="M7 19.5H17L34 11V37L17 28.5H7V19.5Z" fill="url(#bootstrap-announcementGradient)"
+                                stroke="#9DEEFF" stroke-width="1.4" stroke-linejoin="round" />
+                            <path d="M17 28.5L20.5 41H27L23.5 31.7" fill="#0875FF" stroke="#42DFFF" stroke-width="1.5"
+                                stroke-linejoin="round" />
+                            <g fill="none" stroke="#42DFFF" stroke-width="2.5" stroke-linecap="round">
+                                <path d="M38 19Q44 24 38 29" />
+                                <path d="M41 14Q49 24 41 34" />
+                            </g>
+                        </svg>
+                    </span>
+                    <p><b>Announcements</b><small>Don't miss important MedVix updates.</small></p>
+                </div>
+            </div>
+
+            <button class="bootstrap-primary-button" id="enableNotifications" type="button">
+                Enable notifications
+            </button>
+            <button class="bootstrap-text-button" id="notNow" type="button">
+                Not now
+            </button>
+
+            <p class="bootstrap-permission-footnote">
+                <svg viewBox="0 0 48 48" width="24" height="24" aria-hidden="true">
+                    <g fill="currentColor">
+                        <circle cx="24" cy="24" r="15" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(0 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(45 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(90 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(135 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(180 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(225 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(270 24 24)" />
+                        <rect x="21" y="2" width="6" height="10" rx="1.5" transform="rotate(315 24 24)" />
+                    </g>
+                    <circle cx="24" cy="24" r="6.5" fill="#061329" />
+                </svg>
+                <span>You can always enable notifications later in Settings.</span>
+            </p>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         SPA APPLICATION HOST — UNCHANGED
          ============================================================ -->
     <div id="app-root" data-app="medvix"></div>
 
     <!-- ============================================================
          GOOGLE PLAY IN-APP UPDATE — FLEXIBLE RESTART BANNER
-         Hidden by default; app.js toggles data-visible="true".
          ============================================================ -->
     <div id="play-update-banner" role="status" aria-live="polite" data-visible="false" hidden>
         <div class="pub-text">
@@ -395,74 +1929,41 @@
     </div>
 
     <!-- ============================================================
-         DEEP-LINK CAPTURE (Capacitor) — CAPTURE ONLY, NO ROUTING
-         ============================================================
-         Capacitor can fire `appUrlOpen` before `app.js` has had a chance
-         to load its own listener. This script captures those URLs into a
-         global so they are not lost.
-
-         It deliberately does NOT navigate. Routing decisions — file URIs
-         to the file pipeline, routes to the router, custom schemes to
-         their handlers — belong to `app.js`, which owns the full URL
-         contract and can tell a `content://` URI from an App Link.
-
-         Routing from here was the source of the `/pages/content://…html`
-         404 error: the raw URL went straight to the router, which tried
-         to fetch it as a page path.
-
-         Contract with app.js:
-           window.__deepLink.launch    — string|null   (cold start)
-           window.__deepLink.queue     — string[]      (warm start, buffered)
-
-         FileOpen (external PDFs and other files) is handled by app.js
-         directly via the FileOpen plugin — no capture needed here.
+         DEEP-LINK CAPTURE (Capacitor) — UNCHANGED
          ============================================================ -->
     <script>
-        // Shared deep-link buffer between this early capture script and
-        // /scripts/app.js. Shape:
-        //   launch  — string|null  cold-start URL (from getLaunchUrl)
-        //   queue   — string[]     warm-start URLs buffered before app.js boots
-        //   frozen  — boolean      set true by app.js after bootstrap completes.
-        //                          Once frozen, app.js's own appUrlOpen listener
-        //                          owns every URL and this early listener
-        //                          stops buffering — otherwise the queue grows
-        //                          unbounded for the rest of the session.
         window.__deepLink = window.__deepLink || {
             launch: null,
-            queue:  [],
+            queue: [],
             frozen: false,
         };
 
-(function captureDeepLinks() {
-    const CapApp = window.Capacitor
-        && window.Capacitor.Plugins
-        && window.Capacitor.Plugins.MedvixApp;
-    if (!CapApp) return;
+        (function captureDeepLinks() {
+            const CapApp = window.Capacitor
+                && window.Capacitor.Plugins
+                && window.Capacitor.Plugins.MedvixApp;
+            if (!CapApp) return;
 
-    // Cold start: the URL that launched the app.
-    // getLaunchUrl() is idempotent — app.js calls it again as a
-    // backup; multiple calls return the same value.
-    CapApp.getLaunchUrl()
-        .then(function (result) {
-            if (result && result.url) {
-                console.log('[DeepLink:early] launch URL:', result.url);
-                window.__deepLink.launch = result.url;
-            }
-        })
-        .catch(function () { /* no launch URL */ });
+            CapApp.getLaunchUrl()
+                .then(function (result) {
+                    if (result && result.url) {
+                        console.log('[DeepLink:early] launch URL:', result.url);
+                        window.__deepLink.launch = result.url;
+                    }
+                })
+                .catch(function () { /* no launch URL */ });
 
-    // Warm start: URLs that arrive while the app is already running.
-    CapApp.addListener('appUrlOpen', function (data) {
-        if (!data || !data.url) return;
-        if (window.__deepLink && window.__deepLink.frozen) return;
-        console.log('[DeepLink:early] appUrlOpen:', data.url);
-        window.__deepLink.queue.push(data.url);
-    });
-})();
+            CapApp.addListener('appUrlOpen', function (data) {
+                if (!data || !data.url) return;
+                if (window.__deepLink && window.__deepLink.frozen) return;
+                console.log('[DeepLink:early] appUrlOpen:', data.url);
+                window.__deepLink.queue.push(data.url);
+            });
+        })();
     </script>
 
     <!-- ============================================================
-         UPDATE BANNER HELPER (global, no module needed)
+         UPDATE BANNER HELPER — UNCHANGED
          ============================================================ -->
     <script>
         window.MedVixUpdateBanner = {
@@ -470,10 +1971,7 @@
                 const el = document.getElementById('play-update-banner');
                 if (!el) return;
                 el.hidden = false;
-                // allow paint before transitioning
-                requestAnimationFrame(() => {
-                    el.dataset.visible = 'true';
-                });
+                requestAnimationFrame(() => { el.dataset.visible = 'true'; });
             },
             hide() {
                 const el = document.getElementById('play-update-banner');
@@ -495,284 +1993,192 @@
     </script>
 
     <!-- ============================================================
-         SINGLE ENTRY POINT
+         SINGLE ENTRY POINT — UNCHANGED
          ============================================================ -->
     <script type="module" src="/scripts/app.js"></script>
 
     <!-- ============================================================
-         EMOJI → FONT AWESOME REPLACEMENT
-         - Replaces emojis using the map loaded from /emoji-map.json
-         - Also converts text nodes whose entire content is a raw
-           Font Awesome class string (e.g. "fa-solid fa-bone") into
-           real <i> elements. This catches pages that do:
-               el.textContent = meta.icon;   // meta.icon = 'fa-solid fa-bone'
+         EMOJI → FONT AWESOME REPLACEMENT — UNCHANGED
          ============================================================ -->
     <script>
-    (async function () {
-        // ------------------------------------------------------------
-        // 1. Load emoji map + palette
-        // ------------------------------------------------------------
-        let PALETTE = {};
-        let EMOJI_MAP = {};
+        (async function () {
+            let PALETTE = {};
+            let EMOJI_MAP = {};
 
-        async function loadMap() {
-            try {
-                const res = await fetch('/emoji-map.json', { cache: 'default' });
-                if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-                const data = await res.json();
-                PALETTE   = (data && data.palette) || {};
-                EMOJI_MAP = (data && data.emojis)  || {};
-                const count = Object.keys(EMOJI_MAP).length;
-                if (count === 0) {
-                    console.warn('[Emoji] /emoji-map.json loaded but contains no entries.');
+            async function loadMap() {
+                try {
+                    const res = await fetch('/emoji-map.json', { cache: 'default' });
+                    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+                    const data = await res.json();
+                    PALETTE = (data && data.palette) || {};
+                    EMOJI_MAP = (data && data.emojis) || {};
+                    const count = Object.keys(EMOJI_MAP).length;
+                    if (count === 0) {
+                        console.warn('[Emoji] /emoji-map.json loaded but contains no entries.');
+                        return false;
+                    }
+                    console.info(`[Emoji] Loaded ${count} entries from /emoji-map.json`);
+                    return true;
+                } catch (err) {
+                    console.warn('[Emoji] Could not load /emoji-map.json:', err);
                     return false;
                 }
-                console.info(`[Emoji] Loaded ${count} entries from /emoji-map.json`);
-                return true;
-            } catch (err) {
-                console.warn('[Emoji] Could not load /emoji-map.json:', err);
-                return false;
             }
-        }
 
-        const ready = await loadMap();
-        if (!ready) return;
+            const ready = await loadMap();
+            if (!ready) return;
 
-        // ------------------------------------------------------------
-        // 2. Helpers
-        // ------------------------------------------------------------
-        function escapeRegExp(str) {
-            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }
-
-        function resolveColor(name) {
-            if (!name) return null;
-            if (typeof name !== 'string') return null;
-            if (name.startsWith('#') || name.startsWith('rgb')) return name;
-            return PALETTE[name] || null;
-        }
-
-        const keys = Object.keys(EMOJI_MAP).sort((a, b) => b.length - a.length);
-        const emojiRegex     = new RegExp(keys.map(escapeRegExp).join('|'), 'gu');
-        const emojiTestRegex = new RegExp(keys.map(escapeRegExp).join('|'), 'u');
-
-        // ------------------------------------------------------------
-        // 3. FA-class-text detection
-        // ------------------------------------------------------------
-        const FA_TEXT_REGEX = /^\s*(?:fa-solid|fa-regular|fa-brands|fas|far|fab)(?:\s+fa-[\w-]+)+\s*$/;
-
-        // ------------------------------------------------------------
-        // 4. Build an <i class="fa-solid ..."> element from a class string
-        // ------------------------------------------------------------
-        function buildIconFromClass(className) {
-            const i = document.createElement('i');
-            let cls = className.trim();
-            cls = cls.replace(/^fas\b/, 'fa-solid')
-                     .replace(/^far\b/, 'fa-regular')
-                     .replace(/^fab\b/, 'fa-brands');
-            if (!/^fa-(solid|regular|brands)\b/.test(cls)) {
-                cls = 'fa-solid ' + cls;
+            function escapeRegExp(str) {
+                return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             }
-            i.className = cls;
-            i.setAttribute('aria-hidden', 'true');
-            return i;
-        }
+            function resolveColor(name) {
+                if (!name) return null;
+                if (typeof name !== 'string') return null;
+                if (name.startsWith('#') || name.startsWith('rgb')) return name;
+                return PALETTE[name] || null;
+            }
 
-        // ------------------------------------------------------------
-        // 5. Build an icon from an emoji-map entry
-        // ------------------------------------------------------------
-        function buildIconFromEntry(info) {
-            const i = document.createElement('i');
-            i.className = `fa-solid ${info.icon}`;
-            i.setAttribute('aria-hidden', 'true');
-            if (info.label) i.title = info.label;
-            const color = resolveColor(info.color);
-            if (color) i.style.color = color;
-            return i;
-        }
+            const keys = Object.keys(EMOJI_MAP).sort((a, b) => b.length - a.length);
+            const emojiRegex = new RegExp(keys.map(escapeRegExp).join('|'), 'gu');
+            const emojiTestRegex = new RegExp(keys.map(escapeRegExp).join('|'), 'u');
+            const FA_TEXT_REGEX = /^\s*(?:fa-solid|fa-regular|fa-brands|fas|far|fab)(?:\s+fa-[\w-]+)+\s*$/;
 
-        // ------------------------------------------------------------
-        // 6. Replace emojis in text nodes
-        // ------------------------------------------------------------
-        function replaceEmojis(root) {
-            const walker = document.createTreeWalker(
-                root,
-                NodeFilter.SHOW_TEXT,
-                {
+            function buildIconFromClass(className) {
+                const i = document.createElement('i');
+                let cls = className.trim();
+                cls = cls.replace(/^fas\b/, 'fa-solid').replace(/^far\b/, 'fa-regular').replace(/^fab\b/, 'fa-brands');
+                if (!/^fa-(solid|regular|brands)\b/.test(cls)) cls = 'fa-solid ' + cls;
+                i.className = cls;
+                i.setAttribute('aria-hidden', 'true');
+                return i;
+            }
+            function buildIconFromEntry(info) {
+                const i = document.createElement('i');
+                i.className = `fa-solid ${info.icon}`;
+                i.setAttribute('aria-hidden', 'true');
+                if (info.label) i.title = info.label;
+                const color = resolveColor(info.color);
+                if (color) i.style.color = color;
+                return i;
+            }
+            function replaceEmojis(root) {
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
                     acceptNode(node) {
                         return node.nodeValue && emojiTestRegex.test(node.nodeValue)
-                            ? NodeFilter.FILTER_ACCEPT
-                            : NodeFilter.FILTER_REJECT;
-                    }
-                }
-            );
-
-            const textNodes = [];
-            while (walker.nextNode()) textNodes.push(walker.currentNode);
-
-            textNodes.forEach(node => {
-                const text = node.nodeValue;
-                const fragment = document.createDocumentFragment();
-                let lastIndex = 0;
-                let match;
-
-                emojiRegex.lastIndex = 0;
-                while ((match = emojiRegex.exec(text)) !== null) {
-                    if (match.index > lastIndex) {
-                        fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-                    }
-                    const emoji = match[0];
-                    const info = EMOJI_MAP[emoji];
-                    fragment.appendChild(info ? buildIconFromEntry(info) : document.createTextNode(emoji));
-                    lastIndex = emojiRegex.lastIndex;
-                }
-
-                if (lastIndex < text.length) {
-                    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
-                }
-
-                node.parentNode.replaceChild(fragment, node);
-            });
-        }
-
-        // ------------------------------------------------------------
-        // 7. Replace text nodes that are just an FA class string
-        // ------------------------------------------------------------
-        function replaceFAClassText(root) {
-            const walker = document.createTreeWalker(
-                root,
-                NodeFilter.SHOW_TEXT,
-                {
-                    acceptNode(node) {
-                        return node.nodeValue && FA_TEXT_REGEX.test(node.nodeValue)
-                            ? NodeFilter.FILTER_ACCEPT
-                            : NodeFilter.FILTER_REJECT;
-                    }
-                }
-            );
-
-            const textNodes = [];
-            while (walker.nextNode()) textNodes.push(walker.currentNode);
-
-            textNodes.forEach(node => {
-                const className = node.nodeValue.trim();
-                const icon = buildIconFromClass(className);
-                node.parentNode.replaceChild(icon, node);
-            });
-        }
-
-        // ------------------------------------------------------------
-        // 8. Ensure icon-only buttons get aria-labels
-        // ------------------------------------------------------------
-        function enhanceIconButtons(root) {
-            root.querySelectorAll('button, a').forEach(el => {
-                const icons = el.querySelectorAll('i.fa-solid, i.fa-regular, i.fa-brands');
-                const text = el.textContent.trim();
-                if (icons.length === 1 && text === '') {
-                    const label = icons[0].title || 'Button';
-                    if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', label);
-                    if (!el.title) el.title = label;
-                }
-            });
-        }
-
-        // ------------------------------------------------------------
-        // 9. Strip emojis from placeholder attributes
-        // ------------------------------------------------------------
-        function cleanPlaceholders(root) {
-            root.querySelectorAll('[placeholder]').forEach(el => {
-                const ph = el.getAttribute('placeholder');
-                if (!ph) return;
-                emojiRegex.lastIndex = 0;
-                const cleaned = ph.replace(emojiRegex, '').trim();
-                if (cleaned !== ph) el.setAttribute('placeholder', cleaned);
-            });
-        }
-
-        function process(root) {
-            if (!root) return;
-            if (root.nodeType !== 1 && root.nodeType !== 9) return;
-            replaceEmojis(root);
-            replaceFAClassText(root);
-            enhanceIconButtons(root);
-            cleanPlaceholders(root);
-        }
-
-        // ------------------------------------------------------------
-        // 10. Initial run + SPA observer
-        // ------------------------------------------------------------
-        process(document.body);
-
-        const observer = new MutationObserver(mutations => {
-            mutations.forEach(m => {
-                if (m.type === 'characterData' && m.target && m.target.parentNode) {
-                    process(m.target.parentNode);
-                    return;
-                }
-
-                m.addedNodes.forEach(node => {
-                    if (node.nodeType === 1) {
-                        process(node);
-                    } else if (node.nodeType === 3 && node.parentNode && node.parentNode.nodeType === 1) {
-                        process(node.parentNode);
+                            ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
                     }
                 });
-            });
-        });
+                const textNodes = [];
+                while (walker.nextNode()) textNodes.push(walker.currentNode);
+                textNodes.forEach(node => {
+                    const text = node.nodeValue;
+                    const fragment = document.createDocumentFragment();
+                    let lastIndex = 0;
+                    let match;
+                    emojiRegex.lastIndex = 0;
+                    while ((match = emojiRegex.exec(text)) !== null) {
+                        if (match.index > lastIndex) {
+                            fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+                        }
+                        const emoji = match[0];
+                        const info = EMOJI_MAP[emoji];
+                        fragment.appendChild(info ? buildIconFromEntry(info) : document.createTextNode(emoji));
+                        lastIndex = emojiRegex.lastIndex;
+                    }
+                    if (lastIndex < text.length) {
+                        fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+                    }
+                    node.parentNode.replaceChild(fragment, node);
+                });
+            }
+            function replaceFAClassText(root) {
+                const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+                    acceptNode(node) {
+                        return node.nodeValue && FA_TEXT_REGEX.test(node.nodeValue)
+                            ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    }
+                });
+                const textNodes = [];
+                while (walker.nextNode()) textNodes.push(walker.currentNode);
+                textNodes.forEach(node => {
+                    const className = node.nodeValue.trim();
+                    const icon = buildIconFromClass(className);
+                    node.parentNode.replaceChild(icon, node);
+                });
+            }
+            function enhanceIconButtons(root) {
+                root.querySelectorAll('button, a').forEach(el => {
+                    const icons = el.querySelectorAll('i.fa-solid, i.fa-regular, i.fa-brands');
+                    const text = el.textContent.trim();
+                    if (icons.length === 1 && text === '') {
+                        const label = icons[0].title || 'Button';
+                        if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', label);
+                        if (!el.title) el.title = label;
+                    }
+                });
+            }
+            function cleanPlaceholders(root) {
+                root.querySelectorAll('[placeholder]').forEach(el => {
+                    const ph = el.getAttribute('placeholder');
+                    if (!ph) return;
+                    emojiRegex.lastIndex = 0;
+                    const cleaned = ph.replace(emojiRegex, '').trim();
+                    if (cleaned !== ph) el.setAttribute('placeholder', cleaned);
+                });
+            }
+            function process(root) {
+                if (!root) return;
+                if (root.nodeType !== 1 && root.nodeType !== 9) return;
+                replaceEmojis(root);
+                replaceFAClassText(root);
+                enhanceIconButtons(root);
+                cleanPlaceholders(root);
+            }
 
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true,
-            characterData: true
-        });
-    })();
+            process(document.body);
+
+            const observer = new MutationObserver(mutations => {
+                mutations.forEach(m => {
+                    if (m.type === 'characterData' && m.target && m.target.parentNode) {
+                        process(m.target.parentNode);
+                        return;
+                    }
+                    m.addedNodes.forEach(node => {
+                        if (node.nodeType === 1) {
+                            process(node);
+                        } else if (node.nodeType === 3 && node.parentNode && node.parentNode.nodeType === 1) {
+                            process(node.parentNode);
+                        }
+                    });
+                });
+            });
+            observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+        })();
     </script>
 
     <!-- ============================================================
-         GLOBAL BROKEN IMAGE HANDLER
-         Catches images that fail to load across the entire app.
-         If an image fails, it hides the image and its wrapper to
-         prevent ugly "alt" text and floating close buttons.
+         GLOBAL BROKEN IMAGE HANDLER — UNCHANGED
          ============================================================ -->
     <script>
-    (function() {
-        function handleBrokenImage(img) {
-            if (!img || img.tagName !== 'IMG') return;
-            
-            const alt = (img.getAttribute('alt') || '').toLowerCase();
-            
-            // Specifically target the "Enlarged image" placeholder
-            if (alt.includes('enlarged image')) {
-                // Hide the broken image itself
-                img.style.display = 'none';
-                
-                // Try to hide the parent container so we don't leave a floating '✕' button
-                const wrapper = img.parentElement;
-                if (wrapper) {
-                    // If the wrapper only contains the image and a close button, hide the whole row
-                    if (wrapper.children.length <= 2) {
-                        wrapper.style.display = 'none';
-                    }
+        (function () {
+            function handleBrokenImage(img) {
+                if (!img || img.tagName !== 'IMG') return;
+                const alt = (img.getAttribute('alt') || '').toLowerCase();
+                if (alt.includes('enlarged image')) {
+                    img.style.display = 'none';
+                    const wrapper = img.parentElement;
+                    if (wrapper && wrapper.children.length <= 2) wrapper.style.display = 'none';
                 }
             }
-        }
-
-        // 1. Listen for errors on images dynamically added by the SPA
-        window.addEventListener('error', function(event) {
-            if (event.target && event.target.tagName === 'IMG') {
-                handleBrokenImage(event.target);
-            }
-        }, true); // Use capture phase to catch it before it bubbles
-
-        // 2. Check images that might have already failed before this script loaded
-        window.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('img').forEach(img => {
-                if (img.complete && img.naturalWidth === 0) {
-                    handleBrokenImage(img);
-                }
+            window.addEventListener('error', function (event) {
+                if (event.target && event.target.tagName === 'IMG') handleBrokenImage(event.target);
+            }, true);
+            window.addEventListener('DOMContentLoaded', function () {
+                document.querySelectorAll('img').forEach(img => {
+                    if (img.complete && img.naturalWidth === 0) handleBrokenImage(img);
+                });
             });
-        });
-    })();
+        })();
     </script>
 
 </body>

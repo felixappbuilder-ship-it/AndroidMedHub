@@ -305,6 +305,16 @@ export function injectViewerStyles() {
       opacity: 0;
       pointer-events: none;
     }
+    
+    /* NEW: Force GPU compositing for pages to make scrolling perfectly smooth */
+    .page {
+      will-change: transform, opacity;
+      transform: translateZ(0); 
+      backface-visibility: hidden;
+    }
+    .page-container {
+      will-change: scroll-position;
+    }
 
     @media (prefers-reduced-motion: reduce) {
       .viewer-header,
@@ -315,6 +325,7 @@ export function injectViewerStyles() {
   `;
   document.head.appendChild(style);
 }
+
 
 // ============================================================================
 // 3. ELEMENT CACHE
@@ -1629,12 +1640,17 @@ export function bindCoreEvents(core) {
     else showHeaderFooter();
   });
 
-  // ── Double tap → toggle zoom ────────────────────────────────────────────
-  subscribe(Events.DOUBLE_TAP, () => {
+  // ── Double tap → toggle zoom centered on tap point ─────────────────────
+  subscribe(Events.DOUBLE_TAP, (payload) => {
+    const focal = (payload && typeof payload.x === 'number' && typeof payload.y === 'number')
+      ? { x: payload.x, y: payload.y }
+      : null;
+
     if (_isMagnified) {
       _emit(core, Events.SCALE_REQUESTED, {
         scale: _preMagnifyScale,
         source: 'double-tap',
+        focal,
       });
       _isMagnified = false;
     } else {
@@ -1643,6 +1659,7 @@ export function bindCoreEvents(core) {
       _emit(core, Events.SCALE_REQUESTED, {
         scale: target,
         source: 'double-tap',
+        focal,
       });
       _isMagnified = true;
     }

@@ -188,18 +188,18 @@ export const CONFIG = deepFreeze({
   TILE_PYRAMID_SCALES: [0.5, 1, 2, 4],
   THUMBNAIL_SCALE: 0.1,
 
-  // ── Memory ────────────────────────────────────────────────────────────────
+// ── Memory ────────────────────────────────────────────────────────────────
   MEMORY_CAP_LOW_MEMORY_MB: 40,
-  MEMORY_CAP_MOBILE_MB: 80,
-  MEMORY_CAP_HIGH_MOBILE_MB: 150,
-  MEMORY_CAP_DESKTOP_MB: 250,
+  MEMORY_CAP_MOBILE_MB: 120,
+  MEMORY_CAP_HIGH_MOBILE_MB: 200,
+  MEMORY_CAP_DESKTOP_MB: 350,
   MEMORY_CAP_MOBILE_MB_LEGACY: 80,
   MEMORY_CAP_DESKTOP_MB_LEGACY: 200,
 
   // ── Device pixel ratio ────────────────────────────────────────────────────
   MAX_DPR: 2,
-  MAX_DPR_MOBILE: 1.5,
-  MAX_DPR_LOW_MEMORY: 1.25,
+  MAX_DPR_MOBILE: 1.25,
+  MAX_DPR_LOW_MEMORY: 1.0,
   MAX_DPR_VERY_LOW_MEMORY: 1.0,
 
   // ── Velocity thresholds ───────────────────────────────────────────────────
@@ -240,11 +240,11 @@ export const CONFIG = deepFreeze({
   },
 
   // ── PDF load limits ───────────────────────────────────────────────────────
-  MAX_PDF_BYTES_DESKTOP: 500 * 1024 * 1024,
+MAX_PDF_BYTES_DESKTOP: 500 * 1024 * 1024,
   MAX_PDF_BYTES_MOBILE: 200 * 1024 * 1024,
   MAX_PDF_BYTES_LOW_MEMORY: 100 * 1024 * 1024,
-  PDF_LOAD_TIMEOUT_DESKTOP_MS: 60000,
-  PDF_LOAD_TIMEOUT_MOBILE_MS: 30000,
+  PDF_LOAD_TIMEOUT_DESKTOP_MS: 120000, // Increased from 60s
+  PDF_LOAD_TIMEOUT_MOBILE_MS: 90000,
 
   // ── DOM contracts ─────────────────────────────────────────────────────────
   PAGE_CONTAINER_CLASS: 'page-container',
@@ -260,8 +260,8 @@ export const CONFIG = deepFreeze({
   FIT_WIDTH_WAIT_TIMEOUT_MS: 2000,
 
   // ── Pyramid window geometry ───────────────────────────────────────────────
-  PYRAMID_MAX_AHEAD: 16,
-  PYRAMID_MAX_BEHIND: 4,
+  PYRAMID_MAX_AHEAD: 6,
+  PYRAMID_MAX_BEHIND: 2,
 
   PYRAMID_GLANCE_INNER: 4,
   PYRAMID_GLANCE_OUTER: 8,
@@ -1175,10 +1175,16 @@ if (blob && typeof blob.size === 'number' && blob.size > capBytes) {
     const url = createObjectURL(blob);
     let handle = null;
 
-    try {
+
+try {
       handle = await Promise.race([
         this._engine.loadDocument(
-          { url, rangeChunkSize: 65536, disableAutoFetch: true },
+          { 
+            url, 
+            disableAutoFetch: true,   // Keep this true: stops background downloading of whole file into RAM
+            useSystemFonts: true,     // NEW: Offloads font memory to the Android OS
+            disableFontFace: false 
+          },
           {
             onProgress: (progress) => {
               try {
@@ -1512,7 +1518,14 @@ main.appendChild(container);
     el.dataset.page = String(pageNum);
 
     const cache = this.getCache();
-    const meta = cache && cache.getPageViewport ? cache.getPageViewport(pageNum) : null;
+    
+    // Try to get this page's exact dimensions. 
+    // If not loaded yet, fallback to Page 1's dimensions so the placeholder 
+    // is instantly sized correctly and can receive magnification immediately.
+    let meta = cache && cache.getPageViewport ? cache.getPageViewport(pageNum) : null;
+    if (!meta && pageNum !== 1) {
+      meta = cache && cache.getPageViewport ? cache.getPageViewport(1) : null;
+    }
 
     if (meta && meta.width > 0 && meta.height > 0) {
       this._applySlotSize(el, meta);
@@ -1521,6 +1534,7 @@ main.appendChild(container);
     }
     return el;
   }
+
 
   _applySlotSize(el, meta) {
     const scale = this._state.get('scale') || 1;
@@ -1778,20 +1792,19 @@ _reconcilePyramid(container, effectiveCentre, limit, displayScale, rotation, sch
     }
   }
 
-  _ringResolutionForDistance(d) {
+_ringResolutionForDistance(d) {
     const abs = Math.abs(d);
 
     if (d >= 0) {
-      if (abs <= 5)  return 1.00;
-      if (abs <= 9)  return 0.80;
-      if (abs <= 12) return 0.60;
-      if (abs <= 14) return 0.40;
-      if (abs <= 15) return 0.20;
-      return 0;
+      if (abs === 0) return 1.00; // Current page: Absolute max quality
+      if (abs === 1) return 0.50; // Next page: Render at 50% (sharpens instantly on scroll)
+      if (abs <= 3)  return 0.25; // Approaching pages: 25% (acts as a blurred placeholder)
+      return 0;                   // Far ahead: Do not render to save RAM
     }
 
-    if (abs <= 1) return 1.00;
-    if (abs <= 3) return 0.40;
+    // Looking backward (users rarely scroll up rapidly)
+    if (abs === 1) return 0.50;
+    if (abs === 2) return 0.25;
     return 0;
   }
 

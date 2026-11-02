@@ -4,10 +4,7 @@
   "description": "Medical exam preparation PWA with Convex backend integration",
   "type": "module",
   "scripts": {
-    "sync-wasm": "node scripts/tools/sync-wasm.mjs",
-    "predev": "npm run sync-wasm",
     "dev": "vite",
-    "prebuild": "npm run sync-wasm",
     "build": "vite build && node scripts/obfuscate-dist.mjs && node scripts/encrypt-json.js && npx cap sync android && git add .",
     "preview": "vite preview",
     "sync": "npx cap sync android",

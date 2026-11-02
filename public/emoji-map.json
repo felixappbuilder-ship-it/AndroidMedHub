@@ -304,7 +304,7 @@
     "☑": { "icon": "fa-square-check", "label": "Checked", "color": "success" },
     "✔️": { "icon": "fa-check", "label": "Included", "color": "success" },
     "✔": { "icon": "fa-check", "label": "Included", "color": "success" },
-    "✓": { "icon": "fa-check", "label": "Included", "color": "success" },
+    
     "❌": { "icon": "fa-circle-xmark", "label": "Cancel", "color": "danger" },
     "❎": { "icon": "fa-square-xmark", "label": "No", "color": "danger" },
     "⚠️": { "icon": "fa-triangle-exclamation", "label": "Warning", "color": "warning" },

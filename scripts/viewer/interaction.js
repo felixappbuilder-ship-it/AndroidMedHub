@@ -503,7 +503,7 @@ export class ZoomManager {
     this._gestureLayoutOrigin = null;
   }
 
-  requestZoom(scale, source) {
+  requestZoom(scale, source, focal) {
     const clamped = clamp(scale, CONFIG.MIN_ZOOM, CONFIG.MAX_ZOOM);
     this._targetScale = clamped;
     this._gestureSource = (source || 'button');
@@ -518,7 +518,7 @@ export class ZoomManager {
       return;
     }
 
-    this._beginSyntheticGesture('center');
+    this._beginSyntheticGesture(source || 'center', focal);
     this._scheduleTransformWrite();
     this._startSettle();
   }
@@ -655,15 +655,22 @@ export class ZoomManager {
 
   // ── Private ───────────────────────────────────────────────────────────────
 
-  _beginSyntheticGesture(_source) {
+  _beginSyntheticGesture(_source, focal) {
     const els = getViewerElements();
     const main = els && els.main;
     const rect = main ? main.getBoundingClientRect()
       : { left: 0, top: 0, width: 0, height: 0 };
 
     this._gestureStartScale = this._currentScale;
-    this._focalClientX = rect.left + (rect.width || 0) / 2;
-    this._focalClientY = rect.top + (rect.height || 0) / 2;
+
+    if (focal && typeof focal.x === 'number' && typeof focal.y === 'number') {
+      this._focalClientX = focal.x;
+      this._focalClientY = focal.y;
+    } else {
+      this._focalClientX = rect.left + (rect.width || 0) / 2;
+      this._focalClientY = rect.top + (rect.height || 0) / 2;
+    }
+
     this._gestureActive = true;
 
     const node = this._transformNode;
@@ -1098,7 +1105,7 @@ export function createInteractionLayer(core) {
 
   teardowns.push(bus.on(Events.SCALE_REQUESTED, (payload) => {
     if (!payload || typeof payload.scale !== 'number') return;
-    zoom.requestZoom(payload.scale, payload.source || 'external');
+    zoom.requestZoom(payload.scale, payload.source || 'external', payload.focal || null);
   }));
 
   teardowns.push(bus.on(Events.LAYOUT_CHANGED, () => {

@@ -158,7 +158,42 @@ function ensureToastContainer() {
     }
 }
 
+// ── Toast de-duplication ("boss" rule) ─────────────────────────────
+//
+// This module is the single authority over what gets surfaced as a
+// toast. Only one instance of each distinct message may appear until
+// a *different* message has been shown. Concretely:
+//
+//   showToast("Online")    → shown
+//   showToast("Online")    → suppressed (identical to last)
+//   showToast("Online")    → suppressed (still identical)
+//   showToast("Offline")   → shown (different — unlocks "Online")
+//   showToast("Online")    → shown (last was "Offline", so different)
+//
+// The memory is persistent for the session. It is *not* cleared by
+// toast auto-dismissal, page transitions, or hideLoading(). The point
+// is to survive network-poll storms that would otherwise spam the same
+// message every tick.
+//
+// Comparison is by message text only, matching the requirement that
+// "any other named online" should be suppressed. If you ever want the
+// type to matter too, extend the guard to also compare `type`.
+//
+// Call resetToastMemory() to allow the next showToast() call to fire
+// even if it repeats the previous message. Exposed on window.ui for
+// QA / devtools and for callers that genuinely need a forced repeat.
+let _lastToastMessage = null;
+let _hasShownToast    = false;
+
 export function showToast(message, type = 'info', duration = 3000) {
+    // Suppress identical consecutive toasts. Any different message
+    // updates _lastToastMessage, which re-unlocks the previous one.
+    if (_hasShownToast && _lastToastMessage === message) {
+        return;
+    }
+    _hasShownToast    = true;
+    _lastToastMessage = message;
+
     ensureToastContainer();
 
     const toast = document.createElement('div');
@@ -174,6 +209,19 @@ export function showToast(message, type = 'info', duration = 3000) {
             if (toast.parentNode) toast.remove();
         }, 300);
     }, duration);
+}
+
+/**
+ * Forget the last-shown toast message, allowing the next showToast()
+ * call to display even if it repeats the previous message.
+ *
+ * Exposed for QA / devtools and for any caller that needs an explicit
+ * forced repeat (e.g., a user-initiated "Save" that must be confirmed
+ * even though a previous toast used the same text).
+ */
+export function resetToastMemory() {
+    _lastToastMessage = null;
+    _hasShownToast    = false;
 }
 
 // ==================== MODAL DIALOGS ====================
@@ -669,6 +717,7 @@ export function updateProgressBar(elementId, percentage) {
 
 window.ui = {
     showToast,
+    resetToastMemory,    // ← new
     showLoading,
     hideLoading,
     showConfirmationDialog,
@@ -678,7 +727,7 @@ window.ui = {
     applyTheme,
     getTheme,
     setTheme,
-    syncStatusBar,       // ← new
+    syncStatusBar,
     disableForm,
     enableForm,
     resetForm,
