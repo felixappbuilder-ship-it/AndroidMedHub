@@ -163,8 +163,9 @@ export async function clearUser() {
 
 export function checkAuth() {
     const token = getToken();
-    const hasUser = !!currentUser;
-    return !!token && hasUser;
+    const storageUser = utils.getLocalStorage('user', null);
+    // If we have an access token and either a loaded currentUser or a cached user in localStorage, session is valid
+    return !!token && (!!currentUser || !!storageUser);
 }
 
 // ==================== ONLINE CHECK ====================

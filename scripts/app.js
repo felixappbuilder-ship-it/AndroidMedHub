@@ -1562,10 +1562,23 @@ async function bootstrap() {
         // fileLaunchPending for referral badge + route resolution.
         await capturesPromise;
 
-        // Synchronous auth read — reads a token from localStorage,
-        // doesn't depend on initUser() having completed.
-        const exactToken = utils.getLocalStorage('accessToken');
-        appAuthenticated = !!exactToken;
+        // ── Await local init first so token & user state are 100% hydrated ──
+        const initOutcome = await Promise.race([
+            localInitOutcome,
+            new Promise((resolve) => setTimeout(() => {
+                resolve({ ok: false, err: 'timeout' });
+            }, 15000)),
+        ]);
+        
+        // Use auth module's canonical check combined with token presence
+        appAuthenticated = auth.checkAuth() || !!utils.getLocalStorage('accessToken');
+        appInitialized = true;
+
+        if (appAuthenticated) {
+            console.log('[App] 100% SURE: Valid session/token exists after local init.');
+        } else {
+            console.log('[App] 100% SURE: No session found.');
+        }
 
         if (appAuthenticated) {
             console.log('[App] 100% SURE: Token exists in storage.');
@@ -1680,25 +1693,11 @@ async function bootstrap() {
         const localOk  = initOutcome.ok;
         const localErr = initOutcome.err;
 
-        // ── Progress: connection done → environment active (85) ───────
+// ── Progress: connection done → environment active (85) ───────
         await _pace(1000);
         updateProgress(85);
         await _pace(1000);
 
-        // ── Notification permission gate — "notification stage" ──────
-        //
-        // Milestone 85 is the stage where notifications are wired up.
-        // This is the exact point to check POST_NOTIFICATIONS: if it
-        // hasn't been granted, show the rationale overlay and pause.
-        // The promise resolves only after the user interacts (either
-        // taps "Enable notifications" — which triggers the Android
-        // native dialog — or "Not now" / "×"). Milestones 95 and 100
-        // are not emitted until then, so the splash visibly waits.
-        //
-        // Fast paths (all skip instantly, no UI):
-        //   • POST_NOTIFICATIONS already granted
-        //   • Native bridge not available (web build)
-        //   • Notification rationale markup not present
         try {
             await maybePromptNotificationPermission();
         } catch (e) {
