@@ -25,6 +25,8 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.medhurb.app.viewer.storage.MedvixStorageResolver;
+import com.medhurb.app.viewer.storage.MedvixStorageResolver.ResolvedDocument;
 import com.medhurb.app.viewer.ui.MedvixPdfActivity;
 
 import org.json.JSONArray;
@@ -44,25 +46,6 @@ import java.util.concurrent.Executors;
 
 /**
  * Capacitor Bridge Plugin for the Native Android Document Viewer Engine.
- *
- * Bridges JavaScript (`scripts/viewer.js`, `scripts/viewer/native-bridge.js`,
- * `scripts/pages/resource-browser.js`) to `MedvixPdfActivity` and native
- * `PdfRenderer` / sidecar storage.
- *
- * Exposed @PluginMethod APIs:
- *   • openDocument(opts)      — Launch full-screen MedvixPdfActivity over a
- *                               local file or content:// URI (zero base64).
- *   • getDocumentInfo(opts)   — Inspect file metadata, existence, saved page
- *                               state, bookmarks count, and annotations count.
- *   • generateThumbnail(opts) — Render & cache a WebP cover thumbnail on a
- *                               background worker thread.
- *   • exportAnnotations(opts) — Export sidecar bookmarks/notes/highlights JSON.
- *   • clearSidecarData(opts)  — Delete reader_state.json & annotations.json.
- *
- * Emitted Events:
- *   • viewerClosed            — Fired when MedvixPdfActivity finishes.
- *   • unlockRequested         — Fired when user taps "Unlock Full" in preview.
- *   • externalDocumentOpened  — Fired on warm-start external URI delivery.
  */
 @CapacitorPlugin(name = "MedvixPdfViewer")
 public class MedvixPdfViewerPlugin extends Plugin {
@@ -172,24 +155,19 @@ public class MedvixPdfViewerPlugin extends Plugin {
         boolean unlockRequested = false;
 
         if (data != null) {
-            // FIXED: Using the actual constants defined in MedvixPdfActivity
             String extraAction = data.getStringExtra(MedvixPdfActivity.EXTRA_RESULT_ACTION);
             if (extraAction != null && !extraAction.isEmpty()) {
                 action = extraAction;
             }
             
-            // FIXED: The Activity writes to EXTRA_RESULT_RESOURCE_ID, not EXTRA_RESOURCE_ID
             String extraResId = data.getStringExtra(MedvixPdfActivity.EXTRA_RESULT_RESOURCE_ID);
             if (extraResId != null && !extraResId.isEmpty()) {
                 resourceId = extraResId;
             }
             
-            // FIXED: Using the correct constant names
             lastPageIndex = data.getIntExtra(MedvixPdfActivity.EXTRA_RESULT_LAST_PAGE, 0);
             totalPages = data.getIntExtra(MedvixPdfActivity.EXTRA_RESULT_TOTAL_PAGES, 0);
             
-            // FIXED: The Activity does not have a RESULT_UNLOCK_REQUESTED boolean. 
-            // It signals unlock via the action string.
             unlockRequested = "unlock_subscription".equals(action);
         }
 
@@ -335,7 +313,6 @@ public class MedvixPdfViewerPlugin extends Plugin {
 
                 File thumbDir = new File(context.getCacheDir(), THUMB_CACHE_DIR);
                 if (!thumbDir.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
                     thumbDir.mkdirs();
                 }
 
@@ -552,11 +529,6 @@ public class MedvixPdfViewerPlugin extends Plugin {
     // 5. SHARED STATIC SIDECAR & EVENT HELPERS (Used by MedvixPdfActivity)
     // ========================================================================
 
-    /**
-     * Emit viewerClosed / unlockRequested if MedvixPdfActivity was started
-     * directly from Java (e.g., FileOpenPlugin external ACTION_VIEW launch)
-     * rather than via startActivityForResult.
-     */
     public static void notifyExternalViewerClosed(
             String action,
             String resourceId,
@@ -583,7 +555,6 @@ public class MedvixPdfViewerPlugin extends Plugin {
         String safeSlug = (slugId == null || slugId.isEmpty()) ? "default_doc" : slugId;
         File dir = new File(new File(context.getFilesDir(), SIDECAR_ROOT_DIR), safeSlug);
         if (!dir.exists()) {
-            //noinspection ResultOfMethodCallIgnored
             dir.mkdirs();
         }
         return dir;
@@ -630,7 +601,6 @@ public class MedvixPdfViewerPlugin extends Plugin {
             File[] children = dir.listFiles();
             if (children != null) {
                 for (File child : children) {
-                    //noinspection ResultOfMethodCallIgnored
                     child.delete();
                 }
             }
@@ -795,7 +765,22 @@ public class MedvixPdfViewerPlugin extends Plugin {
         return null;
     }
 
+    /**
+     * FIXED: Now uses the robust MedvixStorageResolver which perfectly mirrors 
+     * the layout.js logic used by the JavaScript downloader.
+     */
     private File findFileByResourceId(Context context, String resourceId) {
+        // 1. Use the robust MedvixStorageResolver
+        try {
+            ResolvedDocument doc = MedvixStorageResolver.resolveByResourceId(context, resourceId, null, null);
+            if (doc != null && doc.hasBackingFile()) {
+                return doc.getBackingFile();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "MedvixStorageResolver failed, falling back", e);
+        }
+
+        // 2. Legacy fallback (naive search) - just in case
         String safeId = resourceId.replaceAll("[^a-zA-Z0-9._-]", "_");
         File[] dirs = new File[]{
                 new File(context.getFilesDir(), "content"),
