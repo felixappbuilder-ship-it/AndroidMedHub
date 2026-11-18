@@ -605,7 +605,7 @@ public final class PdfDocumentEngine implements AutoCloseable {
                         pageIndex,
                         page.getWidth(),
                         page.getHeight(),
-                        page.shouldScaleForPrinting()
+                        true // Safe fallback for older compileSdk
                 );
                 metricsCache[pageIndex] = m;
                 return m;
@@ -765,7 +765,7 @@ public final class PdfDocumentEngine implements AutoCloseable {
 
                 if (metricsCache[request.pageIndex] == null) {
                     metricsCache[request.pageIndex] = new PageMetrics(
-                            request.pageIndex, rawW, rawH, page.shouldScaleForPrinting()
+                            request.pageIndex, rawW, rawH, true // Safe fallback
                     );
                 }
 

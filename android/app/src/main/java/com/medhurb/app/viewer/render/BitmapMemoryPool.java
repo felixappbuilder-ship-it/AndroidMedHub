@@ -712,7 +712,7 @@ public final class BitmapMemoryPool implements ComponentCallbacks2 {
             flushPool();
         } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE) {
             // Foreground & moderate — light trim only.
-            lruCache.trimToSize((maxCacheBytes * 3L) / 4);
+            lruCache.trimToSize((maxCacheBytes * 3) / 4);
         }
     }
 
