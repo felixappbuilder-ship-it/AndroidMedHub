@@ -143,7 +143,7 @@ public class MedvixPdfViewerPlugin extends Plugin {
             if (resourceId != null && !resourceId.isEmpty()) {
                 intent.putExtra(MedvixPdfActivity.EXTRA_RESOURCE_ID, resourceId);
             }
-            intent.putExtra(MedvixPdfActivity.EXTRA_SLUG_ID, source.slugId);
+            
             intent.putExtra(MedvixPdfActivity.EXTRA_TITLE, source.displayName);
             if (source.mimeType != null && !source.mimeType.isEmpty()) {
                 intent.putExtra(MedvixPdfActivity.EXTRA_MIME_TYPE, source.mimeType);
@@ -172,18 +172,25 @@ public class MedvixPdfViewerPlugin extends Plugin {
         boolean unlockRequested = false;
 
         if (data != null) {
-            String extraAction = data.getStringExtra(MedvixPdfActivity.RESULT_ACTION);
+            // FIXED: Using the actual constants defined in MedvixPdfActivity
+            String extraAction = data.getStringExtra(MedvixPdfActivity.EXTRA_RESULT_ACTION);
             if (extraAction != null && !extraAction.isEmpty()) {
                 action = extraAction;
             }
-            String extraResId = data.getStringExtra(MedvixPdfActivity.EXTRA_RESOURCE_ID);
+            
+            // FIXED: The Activity writes to EXTRA_RESULT_RESOURCE_ID, not EXTRA_RESOURCE_ID
+            String extraResId = data.getStringExtra(MedvixPdfActivity.EXTRA_RESULT_RESOURCE_ID);
             if (extraResId != null && !extraResId.isEmpty()) {
                 resourceId = extraResId;
             }
-            lastPageIndex = data.getIntExtra(MedvixPdfActivity.RESULT_LAST_PAGE_INDEX, 0);
-            totalPages = data.getIntExtra(MedvixPdfActivity.RESULT_TOTAL_PAGES, 0);
-            unlockRequested = data.getBooleanExtra(MedvixPdfActivity.RESULT_UNLOCK_REQUESTED, false)
-                    || "unlock_subscription".equals(action);
+            
+            // FIXED: Using the correct constant names
+            lastPageIndex = data.getIntExtra(MedvixPdfActivity.EXTRA_RESULT_LAST_PAGE, 0);
+            totalPages = data.getIntExtra(MedvixPdfActivity.EXTRA_RESULT_TOTAL_PAGES, 0);
+            
+            // FIXED: The Activity does not have a RESULT_UNLOCK_REQUESTED boolean. 
+            // It signals unlock via the action string.
+            unlockRequested = "unlock_subscription".equals(action);
         }
 
         JSObject payload = new JSObject();

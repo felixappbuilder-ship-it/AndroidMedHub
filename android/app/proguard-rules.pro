@@ -101,3 +101,13 @@
 # Keeps source file and line numbers in stack traces so mapping.txt is useful.
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# =========================================================================
+# ADDED: Native PDF Export Hack
+# =========================================================================
+# SilentPdfPrinter lives in the `android.print` package to bypass 
+# package-private constructors in the Android SDK. Because it is not in 
+# `com.medhurb.app`, it is NOT covered by the main app keep rule. R8 will 
+# strip it if we don't explicitly protect it here.
+-keep class android.print.SilentPdfPrinter { *; }
+-keep interface android.print.SilentPdfPrinter$Callback { *; }

@@ -19,7 +19,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -640,7 +639,7 @@ public final class BitmapMemoryPool implements ComponentCallbacks2 {
 
     private void evictPoolToFitLocked(int targetMaxBytes) {
         int safeTarget = Math.max(0, targetMaxBytes);
-        Iterator>> it = sizeBuckets.entrySet().iterator();
+        Iterator<Map.Entry<Integer, Deque<Bitmap>>> it = sizeBuckets.entrySet().iterator();
         while (currentPoolBytes > safeTarget && it.hasNext()) {
             Map.Entry<Integer, Deque<Bitmap>> entry = it.next();
             Deque<Bitmap> deque = entry.getValue();
@@ -660,19 +659,60 @@ public final class BitmapMemoryPool implements ComponentCallbacks2 {
 
     // ── Android OS ComponentCallbacks2 Memory Pressure Hooks ─────────────────
 
+    /**
+     * Responds to Android's memory-pressure signals with a severity escalation
+     * that matches Android's own ordering:
+     *
+     *   Foreground tiers (light → critical):
+     *     TRIM_MEMORY_RUNNING_MODERATE (5)  → light cache trim
+     *     TRIM_MEMORY_RUNNING_LOW      (10) → moderate cache trim + pool flush
+     *     TRIM_MEMORY_RUNNING_CRITICAL (15) → aggressive trim + pool flush
+     *
+     *   UI_HIDDEN (20) — app just went to background; keep the pool warm so
+     *   return-to-foreground stays fast. Light trim only.
+     *
+     *   Background tiers (moderate → complete):
+     *     TRIM_MEMORY_BACKGROUND (40) → moderate cache trim + pool flush
+     *     TRIM_MEMORY_MODERATE   (60) → aggressive trim + pool flush
+     *     TRIM_MEMORY_COMPLETE   (80) → clear everything
+     *
+     * Previous implementation used a single `level >= RUNNING_CRITICAL` guard,
+     * which incorrectly routed every signal from 15 upward — including the
+     * light UI_HIDDEN transition and moderate BACKGROUND — into clearAll(),
+     * causing unnecessary re-renders whenever the app was backgrounded.
+     */
     @Override
     public void onTrimMemory(int level) {
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
-                || level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+        // UI_HIDDEN is a distinct transition (numeric value 20 sits between
+        // RUNNING_CRITICAL=15 and BACKGROUND=40) — handle it first.
+        if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            // Going to background: light cache trim, keep pool warm for fast return.
+            lruCache.trimToSize(maxCacheBytes / 2);
+            return;
+        }
+
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+            // Background & system will kill soon — clear everything.
             clearAll();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
-                || level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+            // Background & low memory — aggressive trim.
             lruCache.trimToSize(maxCacheBytes / 4);
             flushPool();
-        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE
-                || level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            // Background & moderate pressure — trim half.
             lruCache.trimToSize(maxCacheBytes / 2);
             flushPool();
+        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+            // Foreground & critical — aggressive trim, accept re-render of non-visible pages.
+            lruCache.trimToSize(maxCacheBytes / 4);
+            flushPool();
+        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            // Foreground & low — trim half + drain pool.
+            lruCache.trimToSize(maxCacheBytes / 2);
+            flushPool();
+        } else if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE) {
+            // Foreground & moderate — light trim only.
+            lruCache.trimToSize((maxCacheBytes * 3L) / 4);
         }
     }
 

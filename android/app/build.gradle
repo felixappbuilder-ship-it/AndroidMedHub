@@ -13,8 +13,8 @@ android {
         applicationId "com.medhurb.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 13
-        versionName "1.1.2"
+        versionCode 14
+        versionName "1.1.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
@@ -60,27 +60,10 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
 
+    // ── ADDED: RecyclerView (Fixes the PdfPageAdapter & MedvixPdfActivity errors) ──
+    implementation "androidx.recyclerview:recyclerview:1.3.2"
+
     // ── androidx.core — REQUIRED EXPLICITLY ─────────────────────────
-    //
-    // Declares the direct dependency so a version is on the graph even
-    // before resolution runs. The MINIMUM version is enforced by the
-    // subprojects { configurations.all { force … } } block in the
-    // PROJECT-ROOT build.gradle — not here. A force rule declared in
-    // this module file runs BEFORE `apply from: 'capacitor.build.gradle'`
-    // below, and anything that file (or the root project) applies
-    // afterward can override it. That is why the previous in-module
-    // `configurations.all` block did not actually pin 1.13.0 and the
-    // release build still failed with
-    //
-    //     cannot find symbol: variable APPEARANCE_LIGHT_STATUS_BARS
-    //
-    // Moving the force to root level means it runs last and wins.
-    //
-    // MainActivity currently uses WindowInsetsCompat
-    // .APPEARANCE_LIGHT_STATUS_BARS (the deprecated alias) so this
-    // build compiles regardless of the resolved version — but keeping
-    // the resolution consistent prevents a future cleanup from
-    // re-introducing the same failure.
     implementation "androidx.core:core:1.13.0"
 
     implementation project(':capacitor-android')
@@ -93,33 +76,12 @@ dependencies {
     implementation 'com.google.android.play:app-update:2.1.0'
 
     // Google Play In-App Review API
-    //
-    // NOTE: ReviewManagerHelper imports Task / OnCompleteListener from
-    // com.google.android.gms.tasks, NOT the retired play.core.tasks
-    // package. This artifact pulls com.google.android.gms:play-services-tasks
-    // in transitively, so those imports resolve with no extra Gradle change.
     implementation 'com.google.android.play:review:2.0.1'
 
     // Google Play Install Referrer (deferred deep links)
     implementation "com.android.installreferrer:installreferrer:2.2"
 
     // ── Firebase Cloud Messaging ────────────────────────────────────
-    //
-    // The BoM (Bill of Materials) pins compatible versions of every
-    // Firebase library pulled in transitively. Never pin
-    // `com.google.firebase:firebase-messaging:<version>` by hand —
-    // doing so bypasses the BoM and leads to version-skew crashes
-    // (e.g. firebase-common mismatched against firebase-installations).
-    //
-    // Do NOT add a direct dependency on firebase-installations,
-    // firebase-common, firebase-iid, or play-services-base here.
-    // All of them arrive transitively via firebase-messaging and the
-    // BoM resolves compatible versions across the graph.
-    //
-    // SDK version note: firebase-messaging (BoM 35.x) requires
-    // minSdkVersion >= 21 and compileSdk >= 34. Your variables.gradle
-    // already satisfies both — confirm it stays that way if you bump
-    // minSdk later.
     implementation platform('com.google.firebase:firebase-bom:35.1.0')
     implementation 'com.google.firebase:firebase-messaging'
 }
