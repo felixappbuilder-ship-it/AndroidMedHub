@@ -895,7 +895,7 @@ public final class MedvixStorageResolver {
             byte[] trimmed = new byte[read];
             System.arraycopy(buf, 0, trimmed, 0, read);
             return trimmed;
-        } catch (ErrnoException e) {
+        } catch (ErrnoException | java.io.InterruptedIOException e) {
             // Non-seekable pipe FD: fall back to buffered stream read
             try {
                 FileInputStream fis = new FileInputStream(fd);
