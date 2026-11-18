@@ -435,6 +435,65 @@ public final class MedVixNotifications {
         }
     }
 
+    /**
+     * Posts a notification on medvix_general that opens a generated file
+     * directly inside MedVix via FileOpenPlugin when tapped.
+     */
+    public static void displayFileNotification(Context context, int id,
+                                               String title, String body,
+                                               Uri fileUri, String mimeType,
+                                               String route) {
+        createChannelIfNeeded(context);
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        Intent openIntent = new Intent(context, MainActivity.class);
+        openIntent.setAction(Intent.ACTION_VIEW);
+        openIntent.setDataAndType(
+                fileUri,
+                (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/pdf");
+
+        if (validateRoute(route)) {
+            openIntent.putExtra("medvix_notification_route", route);
+        }
+        openIntent.putExtra("medvix_notification_id", id);
+        openIntent.setFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                Intent.FLAG_ACTIVITY_SINGLE_TOP);
+
+        PendingIntent tapIntent = PendingIntent.getActivity(
+                context,
+                id,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        String safeTitle = (title == null || title.trim().isEmpty())
+                ? "MedVix" : title;
+        String safeBody = body == null ? "" : body;
+
+        Notification notification = new NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_medvix_notification)
+                .setContentTitle(safeTitle)
+                .setContentText(safeBody)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(safeBody))
+                .setContentIntent(tapIntent)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build();
+
+        try {
+            NotificationManagerCompat.from(context).notify(id, notification);
+        } catch (SecurityException e) {
+            Log.w(TAG, "notify() rejected", e);
+        }
+    }
+
     // ==================================================================
     //  Static helpers — scheduling
     // ==================================================================

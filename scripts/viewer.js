@@ -1,7 +1,7 @@
 // frontend-user/scripts/viewer.js
 
 /**
- * Universal Document Viewer - Entry Point
+ * Universal Document Viewer - Entry Point (Hybrid Native Android + Web/PWA)
  * ============================================================================
  *
  * Public facade of the viewer subsystem. Shared by two pages:
@@ -10,12 +10,20 @@
  *                                    No auth. Drains a pending file on init.
  *
  *   * pages/resource-browser.html  - catalogue page. Opens catalogue
- *                                    resources in an embedded overlay.
- *                                    Auth required by the page, not here.
+ *                                    resources in the native Android viewer
+ *                                    (on Capacitor Android) or an embedded
+ *                                    DOM overlay (on Web/PWA).
  *
- * This module is page-agnostic. It never checks which page it's mounted on.
- * If the viewer chrome (the #viewer element with its 32 IDs) exists, a file
- * can be loaded into it.
+ * Dual-Path Execution Model:
+ *   1. Native Android (Capacitor + MedvixPdfViewer plugin):
+ *      Routes directly to native MedvixPdfActivity via zero-copy file/URI
+ *      resolution (MedvixStorageResolver). Never mounts the 32-ID DOM viewer,
+ *      never reads files into JS Blobs, and never dynamically imports
+ *      ./viewer/core.js or ./viewer/ui-internal.js.
+ *
+ *   2. Web / PWA Fallback:
+ *      Dynamically imports ./viewer/core.js and ./viewer/ui-internal.js on
+ *      demand and mounts the full HTML5 Canvas + Web Worker viewer.
  *
  * Public exports:
  *   * loadDocumentInPage(docId)                             -> Promise<void>
@@ -24,12 +32,17 @@
  *   * closeEmbeddedViewer()                                 -> void
  *   * openDocumentModal(docId)                              -> Promise<void>  (legacy alias)
  *   * openPendingFile()                                     -> boolean       (host-page hook)
+ *   * isNativeViewerAvailable()                             -> boolean
+ *   * getNativeDocumentInfo(params)                         -> Promise<object>
+ *   * getNativeThumbnailUrl(params, maxDimension?)          -> Promise<string|null>
+ *   * exportNativeAnnotations(params)                       -> Promise<object|null>
  *
- * `opts` carries hint flags for the load. Currently only one flag is used:
- *   * previewMode: boolean - cap rendered pages to 10% and append a
- *     subscribe CTA after the last preview page. Set by resource-browser.js
- *     for premium catalogue resources opened without an active subscription.
- *     Never set by external-file paths (file picker, Android intent).
+ * `opts` carries hint flags for the load:
+ *   * previewMode: boolean - cap rendered pages to 10% and show a subscribe
+ *     CTA after the last preview page. Set by resource-browser.js for premium
+ *     catalogue resources opened without an active subscription. Never set by
+ *     external-file paths (file picker, Android ACTION_VIEW intent).
+ *   * initialPage: number  - optional 0-based page index jump target.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * ASYNC FAILURE PROPAGATION
@@ -40,65 +53,23 @@
  *       → viewer.openDocument(id, title, type, { previewMode })
  *       → window.showViewer(...)  (set to resource-browser.js::showViewer)
  *       → viewer.showEmbeddedViewer(...)
- *       → _loadDocumentIntoEmbedded(...)
+ *       → native MedvixPdfViewer.openDocument(...) OR _loadDocumentIntoEmbedded(...)
  *
- *   Every hop returns a Promise that resolves when the load completes and
- *   rejects when it fails. The Open handler's try/catch is the endpoint:
- *   it restores the button's "Open" state and surfaces a toast.
+ *   Every hop returns a Promise that resolves when the load completes (or when
+ *   the native viewer Activity closes) and rejects when pre-load checks fail
+ *   (missing offline file, failed download, initialization error).
  *
- *   showEmbeddedViewer is written as a plain function (not async) that
- *   returns the Promise from _loadDocumentIntoEmbedded and attaches a
- *   silent `.catch(() => {})` to the returned promise. This silences the
- *   browser's "unhandled rejection" warning for legacy callers that fire
- *   and forget, while still rejecting for callers that await. Awaiting the
- *   same Promise sees the rejection; the two paths do not interfere.
- *
- *   Errors that originate inside `core.loadDocument` are a special case:
- *   core catches them, emits DOCUMENT_ERROR, and ui-internal renders the
- *   standard error container into the viewer chrome. The chain does NOT
- *   see those — loadDocument resolves normally after firing the event.
- *   The chain only sees errors that happen BEFORE core takes over: missing
- *   IndexedDB blob, failed download, core initialization failure. Those
- *   are the cases where the button would otherwise stay stuck at
- *   "Opening…" forever with no visible feedback.
+ *   showEmbeddedViewer is written as a plain (non-async) function that returns
+ *   the load Promise directly while attaching a silent `.catch(() => {})` so
+ *   legacy fire-and-forget callers do not trigger unhandled-rejection warnings,
+ *   while awaiting callers still receive the rejection.
  * ═══════════════════════════════════════════════════════════════════════════
- *
- * External file handling:
- *   Two entry points hand external files to this module:
- *
- *     1. Native payloads (Android intents). The FileOpen plugin delivers
- *        a path-based payload to app.js, which stashes it in
- *        sessionStorage.pendingFileOpen and routes to pages/viewer.html.
- *        That page's init() calls openPendingFile(), which drains the
- *        stash and hands the payload to _openNativeFilePayload().
- *
- *     2. Local File objects (file picker, drag-drop). These arrive via
- *        the LOCAL_FILE_OPEN_REQUESTED bus event on whatever page the
- *        user is on. If the viewer chrome is already mounted (viewer page
- *        or resource-browser overlay), the file loads directly. Otherwise
- *        it's stashed in _pendingLocalFile (File objects cannot be
- *        serialized) and the app routes to pages/viewer.html, whose init
- *        drains the stash.
- *
- *   External files NEVER require auth. The user chose the file; it just
- *   opens. Internal catalogue resources still route through
- *   resource-browser.html's embedded viewer overlay - they never reach
- *   the external-file paths.
- *
- * Document clearing:
- *   Every entry point that starts a new document calls clearViewerContent()
- *   from ui-internal.js. That removes any DOM the previous document left
- *   behind - page containers, canvas wrappers, canvases, images, iframes,
- *   search-layer overlays, error containers, and the preview-mode CTA -
- *   while preserving the four static chrome nodes declared in the host page
- *   (#viewer-loading, #viewer-progress, #viewer-content, #viewer-text-layer).
  *
  * Design constraints:
  *   * Zero import-time side effects. All wiring happens on demand.
- *   * Errors are rendered into the viewer chrome, never thrown to
- *     non-awaiting callers. Awaiting callers receive the rejection.
- *   * Every error message is escaped via utils.escapeHtml.
- *   * No reference to pdfjsLib, Worker, localStorage, or rAF.
+ *   * No static imports of ./viewer/core.js or ./viewer/ui-internal.js so
+ *     Android WebView never parses or allocates memory for unused JS engines.
+ *   * Every rendered error message is escaped via _escapeHtml.
  *
  * @module viewer
  */
@@ -115,40 +86,41 @@ import * as ui from './ui.js';
 import * as router from './router.js';
 
 // ============================================================================
-// VIEWER SUBSYSTEM IMPORTS
-// ============================================================================
-
-import { createCore, Events, CONFIG } from './viewer/core.js';
-import {
-  injectViewerStyles,
-  refreshElementCache,
-  mountChrome,
-  unmountChrome,
-  clearViewerContent,
-} from './viewer/ui-internal.js';
-import { escapeHtml } from './viewer/utils.js';
-
-// ============================================================================
 // MODULE-PRIVATE STATE
 // ============================================================================
 
-/** Singleton core instance. @private @type {import('./viewer/core.js').ViewerCore|null} */
+/** Cached reference to Capacitor MedvixPdfViewer plugin (undefined = unprobed). @private */
+let _nativePlugin;
+
+/** True once Capacitor plugin listeners (e.g. externalDocumentOpened) are attached. @private */
+let _nativeListenersWired = false;
+
+/** Lazily loaded ./viewer/ui-internal.js namespace (Web/PWA fallback only). @private */
+let _uiInternal = null;
+
+/** Singleton core instance (Web/PWA fallback only). @private */
 let _core = null;
+
+/** Singleton core Events enum cache (Web/PWA fallback only). @private */
+let _coreEvents = null;
+
+/** Singleton core CONFIG cache (Web/PWA fallback only). @private */
+let _coreConfig = null;
 
 /** The docId currently being displayed, if any. @private @type {string|null} */
 let _currentDocId = null;
 
-/** True when the current document came from a local file. @private */
+/** True when the current document came from a local/external file. @private */
 let _isLocalFile = false;
 
 /** App-level bus subscription unsubscribe functions. @private @type {Array<() => void>} */
 let _appSubscriptions = [];
 
 /**
- * Singleton promise for the init sequence. Prevents concurrent entry calls
- * from double-constructing the core.
+ * Singleton promise for the Web core init sequence. Prevents concurrent entry
+ * calls from double-constructing the core.
  * @private
- * @type {Promise<import('./viewer/core.js').ViewerCore>|null}
+ * @type {Promise<any>|null}
  */
 let _coreInitPromise = null;
 
@@ -165,52 +137,255 @@ let _pendingLocalFile = null;
 
 /**
  * sessionStorage key used to stash a native FileOpen payload between the
- * page that received it and the viewer page that will load it. The same
- * key is written by app.js when a cold-start or warm-start file intent
- * arrives before the viewer page has mounted.
+ * page that received it and the viewer page that will load it.
  *
  * @private
  * @constant {string}
  */
 const PENDING_FILE_KEY = 'pendingFileOpen';
 
+/** Extension-to-MIME lookup for native viewer hints. @private */
+const EXTENSION_MIME_MAP = Object.freeze({
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  svg: 'image/svg+xml',
+  bmp: 'image/bmp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+});
+
 // ============================================================================
-// 1. CORE LIFECYCLE
+// 1. CAPACITOR NATIVE BRIDGE RESOLUTION
 // ============================================================================
 
 /**
- * Return the singleton core, constructing and initialising it on first call.
- * Concurrent calls share a single init promise.
+ * Safely retrieve `window.Capacitor` without throwing in SSR/worker contexts.
+ * @private
+ * @returns {any|null}
+ */
+function _getCapacitor() {
+  try {
+    if (typeof window !== 'undefined' && window.Capacitor) {
+      return window.Capacitor;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Resolve the native Android `MedvixPdfViewer` Capacitor plugin if running on
+ * Android and registered in MainActivity. Cached after first probe.
  *
  * @private
- * @returns {Promise<import('./viewer/core.js').ViewerCore>}
+ * @returns {any|null}
+ */
+function _getNativeViewerPlugin() {
+  if (_nativePlugin !== undefined) return _nativePlugin;
+
+  const cap = _getCapacitor();
+  if (!cap) {
+    _nativePlugin = null;
+    return null;
+  }
+
+  try {
+    const platform = typeof cap.getPlatform === 'function' ? cap.getPlatform() : '';
+    const isNative = typeof cap.isNativePlatform === 'function'
+      ? cap.isNativePlatform()
+      : platform === 'android';
+
+    if (!isNative || platform !== 'android') {
+      _nativePlugin = null;
+      return null;
+    }
+
+    const available = typeof cap.isPluginAvailable === 'function'
+      ? cap.isPluginAvailable('MedvixPdfViewer')
+      : Boolean(cap.Plugins && cap.Plugins.MedvixPdfViewer);
+
+    if (!available) {
+      _nativePlugin = null;
+      return null;
+    }
+
+    let plugin = null;
+    if (cap.Plugins && cap.Plugins.MedvixPdfViewer) {
+      plugin = cap.Plugins.MedvixPdfViewer;
+    } else if (typeof cap.registerPlugin === 'function') {
+      plugin = cap.registerPlugin('MedvixPdfViewer');
+    }
+
+    _nativePlugin = plugin || null;
+    if (_nativePlugin) {
+      _wireNativePluginListeners(_nativePlugin);
+    }
+    return _nativePlugin;
+  } catch {
+    _nativePlugin = null;
+    return null;
+  }
+}
+
+/**
+ * Attach one-time native Capacitor event listeners for warm-start ACTION_VIEW
+ * intents delivered while the app is already running.
+ *
+ * @private
+ * @param {any} plugin
+ */
+function _wireNativePluginListeners(plugin) {
+  if (_nativeListenersWired || !plugin || typeof plugin.addListener !== 'function') {
+    return;
+  }
+  _nativeListenersWired = true;
+
+  try {
+    plugin.addListener('externalDocumentOpened', (eventData) => {
+      if (!eventData || !eventData.uri) return;
+      _openExternalPayloadNative(plugin, {
+        uri: eventData.uri,
+        mimeType: eventData.mimeType || null,
+        name: eventData.name || 'Document',
+      }).catch(() => { /* handled internally */ });
+    });
+  } catch { /* ignore */ }
+}
+
+/**
+ * True when the native Android `MedvixPdfViewer` engine is available.
+ *
+ * @returns {boolean}
+ */
+export function isNativeViewerAvailable() {
+  return _getNativeViewerPlugin() !== null;
+}
+
+/**
+ * Query file existence, byte size, saved reading progress, bookmarks count,
+ * and annotations count on native Android without opening the viewer UI.
+ *
+ * @param {{ resourceId?: string, relativePath?: string, absolutePath?: string, uri?: string }} params
+ * @returns {Promise<object>}
+ */
+export async function getNativeDocumentInfo(params) {
+  const plugin = _getNativeViewerPlugin();
+  if (!plugin || !params) return { exists: false };
+  try {
+    return await plugin.getDocumentInfo(params);
+  } catch {
+    return { exists: false };
+  }
+}
+
+/**
+ * Generate or fetch a cached WebP cover thumbnail on native Android and
+ * return a WebView-renderable URL via `Capacitor.convertFileSrc()`.
+ *
+ * @param {{ resourceId?: string, relativePath?: string, absolutePath?: string, uri?: string, password?: string }} params
+ * @param {number} [maxDimension=360]
+ * @returns {Promise<string|null>}
+ */
+export async function getNativeThumbnailUrl(params, maxDimension = 360) {
+  const plugin = _getNativeViewerPlugin();
+  const cap = _getCapacitor();
+  if (!plugin || !cap || !params) return null;
+
+  try {
+    const res = await plugin.generateThumbnail({
+      ...params,
+      maxDimension,
+    });
+    if (!res || !res.path) return null;
+    return typeof cap.convertFileSrc === 'function'
+      ? cap.convertFileSrc(res.path)
+      : res.path;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Export all saved bookmarks, highlights, notes, and ink strokes for a
+ * document from its native sidecar store as JSON for cloud backup/sync.
+ *
+ * @param {{ resourceId?: string, relativePath?: string, absolutePath?: string, uri?: string }} params
+ * @returns {Promise<{ slugId: string, annotationsJson: string }|null>}
+ */
+export async function exportNativeAnnotations(params) {
+  const plugin = _getNativeViewerPlugin();
+  if (!plugin || !params) return null;
+  try {
+    return await plugin.exportAnnotations(params);
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// 2. LAZY WEB ENGINE & UI-INTERNAL LOADERS (Web/PWA Fallback Only)
+// ============================================================================
+
+/**
+ * Lazily import `./viewer/ui-internal.js` only when the Web/PWA DOM viewer
+ * path is actually needed. Never executed on native Android.
+ *
+ * @private
+ * @returns {Promise<any>}
+ */
+async function _ensureUiInternal() {
+  if (_uiInternal) return _uiInternal;
+  _uiInternal = await import('./viewer/ui-internal.js');
+  return _uiInternal;
+}
+
+/**
+ * Return the singleton Web viewer core, dynamically importing `./viewer/core.js`
+ * and initialising it on first call. Concurrent calls share a single promise.
+ * Never executed on native Android.
+ *
+ * @private
+ * @returns {Promise<any>}
  */
 function _ensureCore() {
   if (_coreInitPromise) return _coreInitPromise;
 
   _coreInitPromise = (async () => {
+    const [coreMod] = await Promise.all([
+      import('./viewer/core.js'),
+      _ensureUiInternal(),
+    ]);
+
+    const { createCore, Events, CONFIG } = coreMod;
+    _coreEvents = Events;
+    _coreConfig = CONFIG;
+
     const core = createCore();
     _core = core;
     await core.init();
-    _wireAppSubscriptions(core);
-    _maybeInstallDebugShortcut(core);
+    _wireAppSubscriptions(core, Events);
+    _maybeInstallDebugShortcut(CONFIG);
     return core;
   })();
 
-  _coreInitPromise.catch(() => { /* swallow */ });
+  _coreInitPromise.catch(() => {
+    _coreInitPromise = null;
+  });
 
   return _coreInitPromise;
 }
 
 /**
- * Register the app-level bus subscriptions. Registered exactly once, at
- * first `_ensureCore()`. These are viewer-lifetime subscriptions and are
- * deliberately NOT torn down on document switch.
+ * Register app-level bus subscriptions for the Web viewer core.
  *
  * @private
- * @param {import('./viewer/core.js').ViewerCore} core
+ * @param {any} core
+ * @param {any} Events
  */
-function _wireAppSubscriptions(core) {
+function _wireAppSubscriptions(core, Events) {
   const bus = core.getBus();
 
   _appSubscriptions.push(bus.on(Events.NAV_BACK_REQUESTED, () => {
@@ -229,10 +404,10 @@ function _wireAppSubscriptions(core) {
 
 /**
  * @private
- * @param {import('./viewer/core.js').ViewerCore} _core
+ * @param {any} CONFIG
  */
-function _maybeInstallDebugShortcut(_core) {
-  if (!CONFIG.DEBUG_VIEWER) return;
+function _maybeInstallDebugShortcut(CONFIG) {
+  if (!CONFIG || !CONFIG.DEBUG_VIEWER) return;
   try {
     if (typeof window !== 'undefined') {
       window.__viewer = {
@@ -244,8 +419,43 @@ function _maybeInstallDebugShortcut(_core) {
 }
 
 // ============================================================================
-// 2. ENVIRONMENT CHECKS
+// 3. ENVIRONMENT, MIME & HTML ESCAPE HELPERS
 // ============================================================================
+
+/**
+ * Escape HTML special characters for safe error rendering.
+ * @private
+ * @param {string} str
+ * @returns {string}
+ */
+function _escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Normalize an extension or MIME hint into a valid MIME type string.
+ * @private
+ * @param {string|null|undefined} fileTypeOrExt
+ * @param {string|null|undefined} [fallbackMime=null]
+ * @returns {string|undefined}
+ */
+function _resolveMimeType(fileTypeOrExt, fallbackMime = null) {
+  if (fileTypeOrExt && typeof fileTypeOrExt === 'string') {
+    const trimmed = fileTypeOrExt.trim().toLowerCase();
+    if (trimmed.includes('/')) return trimmed;
+    const ext = trimmed.startsWith('.') ? trimmed.slice(1) : trimmed;
+    if (EXTENSION_MIME_MAP[ext]) return EXTENSION_MIME_MAP[ext];
+  }
+  if (fallbackMime && typeof fallbackMime === 'string' && fallbackMime.includes('/')) {
+    return fallbackMime.trim().toLowerCase();
+  }
+  return undefined;
+}
 
 /**
  * True when the DOM is fully parsed and safe to query.
@@ -269,52 +479,39 @@ function _waitForDom() {
 }
 
 /**
- * True when the viewer chrome is mounted and reachable.
- *
- * The chrome lives inside the host page - either pages/viewer.html or the
- * embedded overlay inside pages/resource-browser.html. Both have the same
- * #viewer element with the same 32 IDs. If `refreshElementCache()` returns
- * a main element, the chrome is present and a file can be loaded.
- *
+ * True when the Web viewer chrome (#viewer with its 32 IDs) is mounted in DOM.
  * @private
  * @returns {boolean}
  */
 function _chromeMounted() {
   try {
-    const els = refreshElementCache();
-    return !!(els && els.main);
+    if (_uiInternal && typeof _uiInternal.refreshElementCache === 'function') {
+      const els = _uiInternal.refreshElementCache();
+      return !!(els && els.main);
+    }
+    return typeof document !== 'undefined' && !!document.getElementById('viewer');
   } catch {
     return false;
   }
 }
 
 /**
- * Mount the viewer chrome and clear any residue from a previous document.
- * Idempotent. Safe to call before the core is initialised - mountChrome
- * ignores its argument and only touches the DOM.
- *
+ * Mount the Web viewer chrome and clear any residue from a previous document.
  * @private
- * @param {import('./viewer/core.js').ViewerCore|null} core
+ * @param {any} uiMod
+ * @param {any} core
  */
-function _prepareChromeForFileOpen(core) {
-  try { mountChrome(core); } catch { /* ignore */ }
-  try { clearViewerContent(); } catch { /* ignore */ }
+function _prepareChromeForFileOpen(uiMod, core) {
+  try { uiMod.mountChrome(core); } catch { /* ignore */ }
+  try { uiMod.clearViewerContent(); } catch { /* ignore */ }
 }
 
 // ============================================================================
-// 3. BACK-NAVIGATION CHAIN
+// 4. BACK-NAVIGATION CHAIN & NATIVE RESULT DISPATCH
 // ============================================================================
 
 /**
- * The fallback chain for the viewer's back button. Called from the core's
- * NAV_BACK_REQUESTED event and from the error container's back button.
- *
- * On the viewer page, the page's own back button wires directly to
- * `router.navigateTo('subjects' | 'welcome')` and never emits NAV_BACK.
- * On the resource-browser page, the overlay's back button calls
- * `window.closeViewer()` directly. This chain is the fallback when
- * neither of those applies - e.g. errors during load.
- *
+ * Fallback chain for the viewer's back button or closing standalone viewer page.
  * @private
  */
 function _handleBack() {
@@ -340,22 +537,191 @@ function _handleBack() {
   } catch { /* ignore */ }
 }
 
+/**
+ * Handle the structured ActivityResult returned when `MedvixPdfActivity` closes.
+ * Emits DOM custom events for UI progress updates and triggers subscription
+ * navigation if the user tapped "Unlock Full" inside preview mode.
+ *
+ * @private
+ * @param {string|null} docId
+ * @param {any} result
+ * @returns {boolean} True if subscription navigation was triggered
+ */
+function _handleNativeViewerResult(docId, result) {
+  const lastPageIndex = result && typeof result.lastPageIndex === 'number' ? result.lastPageIndex : 0;
+  const totalPages = result && typeof result.totalPages === 'number' ? result.totalPages : 0;
+  const unlockRequested = Boolean(
+    result && (result.unlockRequested || result.action === 'unlock_subscription')
+  );
+
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('medvix:viewer-closed', {
+        detail: {
+          docId: docId || (result && result.resourceId) || null,
+          lastPageIndex,
+          totalPages,
+          unlockRequested,
+        },
+      }));
+    }
+  } catch { /* ignore */ }
+
+  if (unlockRequested) {
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('medvix:preview-subscribe-requested', {
+          detail: {
+            docId: docId || (result && result.resourceId) || null,
+            lastPageIndex,
+            totalPages,
+          },
+        }));
+      }
+    } catch { /* ignore */ }
+
+    try {
+      router.navigateTo('subscription');
+    } catch { /* ignore */ }
+    return true;
+  }
+
+  return false;
+}
+
 // ============================================================================
-// 4. EXTERNAL FILE - LOCAL FILE OBJECT (file input, drag-drop)
+// 5. NATIVE DOCUMENT OPEN HELPERS (Zero-Copy Disk & URI Paths)
 // ============================================================================
 
 /**
- * Open a `File` object in the viewer.
+ * Resolve and open a catalogue resource in native `MedvixPdfActivity`.
+ * Downloads the resource first if not yet present on device storage.
  *
- * External files are never subject to the catalogue preview policy. The
- * user chose the file; there is no catalogue resource to upsell. No auth
- * is required and none is checked here.
+ * @private
+ * @param {any} plugin
+ * @param {string} docId
+ * @param {string} title
+ * @param {string|null} fileType
+ * @param {{ previewMode?: boolean, initialPage?: number }|null} opts
+ * @returns {Promise<{ handled: boolean, unlockTriggered: boolean }>}
+ */
+async function _openCatalogueDocumentNative(plugin, docId, title, fileType, opts) {
+  const mimeHint = _resolveMimeType(fileType);
+
+  let info = null;
+  try {
+    info = await plugin.getDocumentInfo({
+      resourceId: docId,
+      title: title || undefined,
+      mimeType: mimeHint,
+    });
+  } catch {
+    info = null;
+  }
+
+  if (!info || !info.exists) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      throw new Error('File missing from device storage. Please delete and re-download when online.');
+    }
+
+    try { ui.showLoading('Downloading document...'); } catch { /* ignore */ }
+    let success = false;
+    try {
+      success = await content.downloadResource(docId);
+    } finally {
+      try { ui.hideLoading(); } catch { /* ignore */ }
+    }
+
+    if (!success) {
+      throw new Error('Download failed');
+    }
+
+    try {
+      info = await plugin.getDocumentInfo({
+        resourceId: docId,
+        title: title || undefined,
+        mimeType: mimeHint,
+      });
+    } catch {
+      info = null;
+    }
+  }
+
+  // If the file is not on native filesystem storage, check whether a legacy
+  // IndexedDB blob exists so we can seamlessly fall back to the Web viewer.
+  if (!info || !info.exists) {
+    const legacyBlob = await content.getLocalFile(docId);
+    if (legacyBlob) {
+      return { handled: false, unlockTriggered: false };
+    }
+    throw new Error('File not found after download');
+  }
+
+  const resolvedTitle = title && title !== 'Document'
+    ? title
+    : (info.displayName || title || 'Document');
+
+  const result = await plugin.openDocument({
+    resourceId: docId,
+    title: resolvedTitle,
+    mimeType: _resolveMimeType(fileType, info.mimeType),
+    previewMode: Boolean(opts && opts.previewMode),
+    initialPage: opts && typeof opts.initialPage === 'number' ? opts.initialPage : undefined,
+  });
+
+  const unlockTriggered = _handleNativeViewerResult(docId, result);
+  return { handled: true, unlockTriggered };
+}
+
+/**
+ * Open an external Android intent payload (`uri` or `path`) directly in
+ * native `MedvixPdfActivity` without reading the file into WebView memory.
  *
- * If the viewer chrome is already mounted (viewer page, or the catalogue
- * page with the overlay active), the file loads in place. Otherwise the
- * File object is stashed in `_pendingLocalFile` - File objects cannot be
- * serialized to sessionStorage - and the app routes to `viewer`. That
- * page's init() calls `openPendingFile()`, which drains the stash.
+ * @private
+ * @param {any} plugin
+ * @param {{ path?: string, uri?: string, name?: string, mimeType?: string|null }} payload
+ * @returns {Promise<void>}
+ */
+async function _openExternalPayloadNative(plugin, payload) {
+  if (!payload || (!payload.uri && !payload.path)) return;
+
+  _currentDocId = null;
+  _isLocalFile = true;
+
+  let ext = '';
+  try {
+    if (payload.name && typeof payload.name === 'string') {
+      const parts = payload.name.split('.');
+      if (parts.length > 1) ext = parts.pop();
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const result = await plugin.openDocument({
+      uri: payload.uri || undefined,
+      absolutePath: payload.path || undefined,
+      title: payload.name || 'Document',
+      mimeType: _resolveMimeType(ext, payload.mimeType),
+      previewMode: false,
+    });
+    _handleNativeViewerResult(null, result);
+  } catch (err) {
+    const message = err && err.message ? err.message : 'Failed to open file';
+    try { ui.showToast('Failed to open file: ' + message, 'error'); } catch { /* ignore */ }
+  }
+}
+
+// ============================================================================
+// 6. EXTERNAL FILE - LOCAL FILE OBJECT (file input, drag-drop)
+// ============================================================================
+
+/**
+ * Open a browser `File` object in the viewer.
+ *
+ * External files are never subject to the catalogue preview policy.
+ * If the Web viewer chrome is already mounted, the file loads in place.
+ * Otherwise the File object is stashed in `_pendingLocalFile` and the app
+ * routes to `viewer`, whose init() calls `openPendingFile()`.
  *
  * @private
  * @param {File} file
@@ -366,28 +732,17 @@ async function _handleLocalFileOpen(file) {
 
   await _waitForDom();
 
-  // Chrome not mounted → stash the File and route to the viewer page.
   if (!_chromeMounted()) {
     _pendingLocalFile = file;
     try { router.navigateTo('viewer'); } catch { /* ignore */ }
     return;
   }
 
-  // Chrome mounted → load directly.
   await _loadLocalFileIntoViewer(file);
 }
 
 /**
- * Perform the actual load of a user-selected File into the viewer.
- *
- * Called from two places:
- *   * Directly, when the file input fires on a page with chrome mounted.
- *   * From `openPendingFile()`, after the viewer page's init() drains the
- *     stash written by `_handleLocalFileOpen`.
- *
- * Mounts the viewer chrome before loading. The catalogue path calls
- * `mountChrome` from `showEmbeddedViewer`; the file-open path must do the
- * same because it does not go through that entry point.
+ * Load a user-selected browser `File` into the Web viewer.
  *
  * @private
  * @param {File} file
@@ -406,8 +761,11 @@ async function _loadLocalFileIntoViewer(file) {
   } catch { /* ignore */ }
 
   try {
-    const core = await _ensureCore();
-    _prepareChromeForFileOpen(core);
+    const [core, uiMod] = await Promise.all([
+      _ensureCore(),
+      _ensureUiInternal(),
+    ]);
+    _prepareChromeForFileOpen(uiMod, core);
     await core.loadDocument(file, fileType, file.name || 'Document');
   } catch (err) {
     const message = err && err.message ? err.message : 'Failed to open file';
@@ -416,30 +774,57 @@ async function _loadLocalFileIntoViewer(file) {
 }
 
 // ============================================================================
-// 5. PUBLIC API - loadDocumentInPage
+// 7. PUBLIC API - loadDocumentInPage
 // ============================================================================
 
 /**
- * Load a document identified by `docId` into the current page's viewer
- * chrome. Intended for pages that have the 32 viewer element IDs mounted.
+ * Load a document identified by `docId` into the current page's viewer.
  *
- * This is the internal-document path: it keeps the hard subscription gate.
- * Preview mode is NOT applied here.
+ * This is the internal-document path: it enforces the active subscription
+ * gate. Preview mode is NOT applied here.
  *
  * @param {string} docId
  * @returns {Promise<void>}
  */
 export async function loadDocumentInPage(docId) {
-  refreshElementCache();
-  injectViewerStyles();
-
   _currentDocId = docId;
   _isLocalFile = false;
 
-  const els = refreshElementCache();
+  const nativePlugin = _getNativeViewerPlugin();
+  if (nativePlugin) {
+    try {
+      const hasActive = await subscription.hasActiveSubscription();
+      if (!hasActive) {
+        try { ui.showToast('Subscription required', 'warning'); } catch { /* ignore */ }
+        try { router.navigateTo('subscription'); } catch { /* ignore */ }
+        return;
+      }
+
+      const outcome = await _openCatalogueDocumentNative(
+        nativePlugin, docId, 'Document', null, { previewMode: false }
+      );
+      if (outcome.handled) {
+        if (!outcome.unlockTriggered) {
+          _handleBack();
+        }
+        return;
+      }
+    } catch (err) {
+      await _renderErrorContainer(err);
+      return;
+    } finally {
+      _currentDocId = null;
+    }
+  }
+
+  // Web / PWA fallback path
+  const uiMod = await _ensureUiInternal();
+  const els = uiMod.refreshElementCache();
+  uiMod.injectViewerStyles();
+
   if (!els || !els.main) return;
 
-  clearViewerContent();
+  uiMod.clearViewerContent();
 
   if (els.loading) els.loading.style.display = 'block';
   if (els.progress) els.progress.style.display = 'none';
@@ -466,7 +851,7 @@ export async function loadDocumentInPage(docId) {
     const core = await _ensureCore();
     await core.loadDocument(blob, null, 'Document', { previewMode: false });
   } catch (err) {
-    _renderErrorContainer(err);
+    await _renderErrorContainer(err);
   } finally {
     if (els.loading) els.loading.style.display = 'none';
     if (els.progress) els.progress.style.display = 'none';
@@ -474,38 +859,47 @@ export async function loadDocumentInPage(docId) {
 }
 
 // ============================================================================
-// 6. PUBLIC API - openDocument
+// 8. PUBLIC API - openDocument
 // ============================================================================
 
 /**
  * Open a document from another page. Delegates to `window.showViewer` if
- * the host app defines it; otherwise navigates to the catalogue page.
- *
- * This is the internal-document path. Auth is enforced by the target page's
- * own logic, not here.
- *
- * The delegate call is awaited. When the host app's `window.showViewer`
- * returns a Promise (as the resource-browser's does), any async failure
- * inside the viewer propagates back here and out to the caller. This is
- * what lets the resource-browser Open button's try/catch see "file not
- * found", "download failed", and viewer initialization errors.
+ * the host app defines it (e.g. `resource-browser.js`); otherwise opens via
+ * native Android viewer if the file is locally cached, or routes to the
+ * catalogue page.
  *
  * @param {string} docId
  * @param {string} [title='Document']
  * @param {string|null} [fileType=null]
- * @param {{ previewMode?: boolean }|null} [opts=null]
+ * @param {{ previewMode?: boolean, initialPage?: number }|null} [opts=null]
  * @returns {Promise<void>}
  */
 export async function openDocument(docId, title = 'Document', fileType = null, opts = null) {
-  try { injectViewerStyles(); } catch { /* ignore */ }
-
   if (typeof window !== 'undefined' && typeof window.showViewer === 'function') {
-    // Await the delegate so async failures surface to the caller.
-    // A sync delegate that returns undefined resolves immediately —
-    // which is correct behaviour for legacy hosts that don't return
-    // a Promise.
     await window.showViewer(docId, title, fileType, opts);
     return;
+  }
+
+  const nativePlugin = _getNativeViewerPlugin();
+  if (nativePlugin) {
+    try {
+      const info = await getNativeDocumentInfo({ resourceId: docId });
+      if (info && info.exists) {
+        const hasActive = await subscription.hasActiveSubscription();
+        const previewMode = opts && typeof opts.previewMode === 'boolean'
+          ? opts.previewMode
+          : !hasActive;
+        const outcome = await _openCatalogueDocumentNative(
+          nativePlugin, docId, title, fileType, { ...opts, previewMode }
+        );
+        if (outcome.handled) return;
+      }
+    } catch { /* fall back to catalogue route */ }
+  } else {
+    try {
+      const uiMod = await _ensureUiInternal();
+      uiMod.injectViewerStyles();
+    } catch { /* ignore */ }
   }
 
   try {
@@ -514,108 +908,128 @@ export async function openDocument(docId, title = 'Document', fileType = null, o
 }
 
 // ============================================================================
-// 7. PUBLIC API - showEmbeddedViewer
+// 9. PUBLIC API - showEmbeddedViewer
 // ============================================================================
 
 /**
- * Open the viewer as a fixed-position overlay.
+ * Open a catalogue resource in the viewer.
  *
- * This is the catalogue path. Called by resource-browser.js when a
- * catalogue resource is opened. Mounts the chrome itself.
+ * On native Android (Capacitor), launches `MedvixPdfActivity` directly over
+ * the on-disk file without mounting any DOM overlay or reading blobs into JS.
+ * On Web/PWA, mounts the fixed-position `#viewer` overlay and loads via
+ * `./viewer/core.js`.
  *
- * Returns a Promise that resolves when the load completes and rejects when
- * it fails. Written as a plain (non-async) function so the returned Promise
- * is exactly the one from `_loadDocumentIntoEmbedded` — but with a silent
- * `.catch` attached, so callers that fire-and-forget do not trigger the
- * browser's unhandled-rejection warning. Awaiting the same Promise still
- * sees the rejection; the two paths do not interfere.
+ * Written as a plain (non-async) function returning the load Promise with a
+ * silent `.catch(() => {})` attached so fire-and-forget callers never emit
+ * unhandled-rejection warnings while awaiting callers still catch failures.
  *
  * @param {string} docId
  * @param {string} [title='Document']
  * @param {string|null} [fileType=null]
- * @param {{ previewMode?: boolean }|null} [opts=null]
+ * @param {{ previewMode?: boolean, initialPage?: number }|null} [opts=null]
  * @returns {Promise<void>}
  */
 export function showEmbeddedViewer(docId, title = 'Document', fileType = null, opts = null) {
-  const els = refreshElementCache();
-  injectViewerStyles();
-
   _currentDocId = docId;
   _isLocalFile = false;
 
-  if (!els || !els.main) {
-    return Promise.resolve();
+  const nativePlugin = _getNativeViewerPlugin();
+  if (nativePlugin) {
+    const nativePromise = (async () => {
+      try {
+        const outcome = await _openCatalogueDocumentNative(
+          nativePlugin, docId, title, fileType, opts
+        );
+        if (outcome.handled) {
+          return;
+        }
+        // Fallback if resource exists only in legacy IndexedDB storage
+        await _mountAndLoadWebEmbeddedViewer(docId, title, fileType, opts);
+      } finally {
+        _currentDocId = null;
+      }
+    })();
+
+    nativePromise.catch(() => { /* silence for fire-and-forget callers */ });
+    return nativePromise;
   }
 
-  try { mountChrome(_core); } catch { /* ignore */ }
+  const webPromise = _mountAndLoadWebEmbeddedViewer(docId, title, fileType, opts);
+  webPromise.catch(() => { /* silence for fire-and-forget callers */ });
+  return webPromise;
+}
 
-  clearViewerContent();
+/**
+ * Mount the Web DOM overlay and load a catalogue document into it.
+ *
+ * @private
+ * @param {string} docId
+ * @param {string} title
+ * @param {string|null} fileType
+ * @param {{ previewMode?: boolean }|null} opts
+ * @returns {Promise<void>}
+ */
+async function _mountAndLoadWebEmbeddedViewer(docId, title, fileType, opts) {
+  const uiMod = await _ensureUiInternal();
+  const els = uiMod.refreshElementCache();
+  uiMod.injectViewerStyles();
+
+  if (!els || !els.main) {
+    return;
+  }
+
+  try { uiMod.mountChrome(_core); } catch { /* ignore */ }
+  uiMod.clearViewerContent();
 
   if (els.loading) els.loading.style.display = 'block';
   if (els.progress) els.progress.style.display = 'none';
   if (els.title) els.title.textContent = title || 'Document';
 
-  const loadPromise = _loadDocumentIntoEmbedded(docId, fileType, title, opts);
-
-  // Silence unhandled-rejection warnings for callers that ignore the
-  // returned Promise. The rejection is still delivered to anyone who
-  // awaits loadPromise.
-  loadPromise.catch(() => { /* silence for fire-and-forget callers */ });
-
-  return loadPromise;
+  await _loadDocumentIntoEmbedded(docId, fileType, title, opts);
 }
 
 /**
- * Load a catalogue document into the mounted embedded viewer.
- *
- * Errors that occur before core takes over (missing IndexedDB blob, failed
- * download, core init failure) are rendered into the viewer chrome AND
- * re-thrown so the caller can react. Once core.loadDocument is reached,
- * errors are core's responsibility — core catches them, emits
- * DOCUMENT_ERROR, and ui-internal renders the standard error container.
- * core.loadDocument does not reject for PDF-load errors; it resolves
- * normally after firing the event.
+ * Load a catalogue document into the mounted Web embedded viewer.
  *
  * @private
  * @param {string} docId
  * @param {string|null} fileType
+ * @param {string} [title='Document']
  * @param {{ previewMode?: boolean }|null} [opts=null]
  * @returns {Promise<void>}
  */
 async function _loadDocumentIntoEmbedded(docId, fileType, title = 'Document', opts = null) {
-  const els = refreshElementCache();
+  const uiMod = await _ensureUiInternal();
+  const els = uiMod.refreshElementCache();
   const loadSessionId = Symbol();
   window._activeLoadSession = loadSessionId;
 
   try {
-
     let blob = await content.getLocalFile(docId);
-if (!blob) {
-  if (!navigator.onLine) {
-    // Optional: Call a content.js method here to remove the broken docId from the download manifest
-    throw new Error('File missing from device storage. Please delete and re-download when online.');
-  }
-  try { ui.showLoading('Downloading document...'); } catch { /* ignore */ }
-  const success = await content.downloadResource(docId);
-  try { ui.hideLoading(); } catch { /* ignore */ }
-  if (!success) throw new Error('Download failed');
-  blob = await content.getLocalFile(docId);
-  if (!blob) throw new Error('File not found after download');
-}
+    if (!blob) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        throw new Error('File missing from device storage. Please delete and re-download when online.');
+      }
+      try { ui.showLoading('Downloading document...'); } catch { /* ignore */ }
+      const success = await content.downloadResource(docId);
+      try { ui.hideLoading(); } catch { /* ignore */ }
+      if (!success) throw new Error('Download failed');
+      blob = await content.getLocalFile(docId);
+      if (!blob) throw new Error('File not found after download');
+    }
 
     const core = await _ensureCore();
     await core.loadDocument(blob, fileType, title, opts);
   } catch (err) {
-    // Only render the error if this load session is still current and after a brief grace period
     setTimeout(() => {
       if (window._activeLoadSession === loadSessionId && els && els.main) {
         const message = err && err.message ? err.message : 'Failed to load document';
-        const safe = escapeHtml(String(message));
+        const safe = _escapeHtml(String(message));
         els.main.innerHTML =
           `<div class="error-container" role="alert"><p>${safe}</p></div>`;
       }
     }, 2500);
-    
+
     throw err;
   } finally {
     if (window._activeLoadSession === loadSessionId) {
@@ -626,12 +1040,12 @@ if (!blob) {
 }
 
 // ============================================================================
-// 8. PUBLIC API - closeEmbeddedViewer
+// 10. PUBLIC API - closeEmbeddedViewer & openDocumentModal
 // ============================================================================
 
 /**
- * Close the embedded viewer overlay and release the current document.
- * Idempotent.
+ * Close the Web embedded viewer overlay and release the current document.
+ * Safe no-op when running via native Android Activity. Idempotent.
  *
  * @returns {void}
  */
@@ -642,20 +1056,19 @@ export function closeEmbeddedViewer() {
     }
   } catch { /* ignore */ }
 
-  try { unmountChrome(_core); } catch { /* ignore */ }
-
-  try { clearViewerContent(); } catch { /* ignore */ }
+  if (_uiInternal) {
+    try { _uiInternal.unmountChrome(_core); } catch { /* ignore */ }
+    try { _uiInternal.clearViewerContent(); } catch { /* ignore */ }
+  }
 
   _currentDocId = null;
   _isLocalFile = false;
   _pendingLocalFile = null;
 }
 
-// ============================================================================
-// 9. PUBLIC API - openDocumentModal (legacy alias)
-// ============================================================================
-
 /**
+ * Legacy alias for `openDocument(docId)`.
+ *
  * @param {string} docId
  * @returns {Promise<void>}
  */
@@ -664,21 +1077,23 @@ export async function openDocumentModal(docId) {
 }
 
 // ============================================================================
-// 10. ERROR RENDERING
+// 11. ERROR RENDERING
 // ============================================================================
 
 /**
  * @private
  * @param {unknown} err
+ * @returns {Promise<void>}
  */
-function _renderErrorContainer(err) {
-  const els = refreshElementCache();
+async function _renderErrorContainer(err) {
+  const uiMod = await _ensureUiInternal();
+  const els = uiMod.refreshElementCache();
   if (!els || !els.main) return;
 
   const message = err && typeof err === 'object' && 'message' in err
     ? String(/** @type {{ message: unknown }} */ (err).message)
     : 'Unknown error';
-  const safe = escapeHtml(message);
+  const safe = _escapeHtml(message);
 
   els.main.innerHTML = `<div class="error-container" role="alert">
     <p>Failed to load document: ${safe}</p>
@@ -690,8 +1105,8 @@ function _renderErrorContainer(err) {
 
   backBtn.addEventListener('click', () => {
     try {
-      if (_core) {
-        _core.getBus().emit(Events.NAV_BACK_REQUESTED, {});
+      if (_core && _coreEvents) {
+        _core.getBus().emit(_coreEvents.NAV_BACK_REQUESTED, {});
         return;
       }
     } catch { /* ignore */ }
@@ -700,16 +1115,11 @@ function _renderErrorContainer(err) {
 }
 
 // ============================================================================
-// 11. DEBUG NAMESPACE
+// 12. DEBUG NAMESPACE
 // ============================================================================
 
 /**
- * QA / dev-tools only.
- * @type {{
- *   state: () => object|null,
- *   flags: () => object|null,
- *   report: () => object,
- * }}
+ * QA / dev-tools diagnostics.
  */
 export const __debug = {
   state() {
@@ -730,9 +1140,11 @@ export const __debug = {
 
   report() {
     const base = {
+      engineMode: isNativeViewerAvailable() ? 'native-android' : 'web-js',
+      nativePluginAvailable: isNativeViewerAvailable(),
       docId: _currentDocId,
       isLocalFile: _isLocalFile,
-      coreInited: _core !== null,
+      webCoreInited: _core !== null,
       pendingLocalFile: !!_pendingLocalFile,
       chromeMounted: _chromeMounted(),
       state: null,
@@ -773,35 +1185,24 @@ export const __debug = {
 };
 
 // ============================================================================
-// 12. NATIVE FILE PAYLOAD LOADER
+// 13. NATIVE FILE PAYLOAD LOADER (Web/PWA Fallback) & openPendingFile
 // ============================================================================
-//
-// Native payloads (path-based) are the Android intent path. They are
-// delivered to app.js via the FileOpen Java plugin, stashed in
-// sessionStorage.pendingFileOpen, and drained here by the viewer page's
-// init() -> openPendingFile().
-//
-// By the time _openNativeFilePayload runs, the caller has already verified
-// that the chrome is mounted (that's what openPendingFile's caller checks).
-// No stash-and-route logic lives here - if the chrome is somehow missing,
-// log and bail rather than attempt a redirect that could loop.
 
 /**
- * Load a native-provided file payload into the viewer.
+ * Web/PWA fallback loader when a path-based payload arrives without the
+ * native Android `MedvixPdfViewer` plugin.
  *
  * @private
  * @param {{ path: string, name?: string, mimeType?: string|null, size?: number }} payload
  * @returns {Promise<void>}
  */
-async function _openNativeFilePayload(payload) {
+async function _openNativeFilePayloadWebFallback(payload) {
   if (!payload || !payload.path) return;
 
   await _waitForDom();
 
-  // The chrome should already be mounted by the page that called us. If
-  // it's not, something upstream is broken - bail rather than redirect.
   if (!_chromeMounted()) {
-    console.warn('[Viewer] Native file payload arrived but viewer chrome is not mounted.');
+    console.warn('[Viewer] File payload arrived but viewer chrome is not mounted.');
     return;
   }
 
@@ -817,7 +1218,7 @@ async function _openNativeFilePayload(payload) {
   } catch { /* ignore */ }
 
   try {
-    const bridge = typeof window !== 'undefined' ? window.Capacitor : null;
+    const bridge = _getCapacitor();
     const fetchUrl = bridge && typeof bridge.convertFileSrc === 'function'
       ? bridge.convertFileSrc(payload.path)
       : payload.path;
@@ -830,8 +1231,11 @@ async function _openNativeFilePayload(payload) {
       ? blob.slice(0, blob.size, payload.mimeType)
       : blob;
 
-    const core = await _ensureCore();
-    _prepareChromeForFileOpen(core);
+    const [core, uiMod] = await Promise.all([
+      _ensureCore(),
+      _ensureUiInternal(),
+    ]);
+    _prepareChromeForFileOpen(uiMod, core);
     await core.loadDocument(typedBlob, fileType, payload.name || 'Document');
   } catch (err) {
     const message = err && err.message ? err.message : 'Failed to open file';
@@ -839,45 +1243,42 @@ async function _openNativeFilePayload(payload) {
   }
 }
 
-// ============================================================================
-// 13. PUBLIC API - openPendingFile
-// ============================================================================
-
 /**
  * Drain a pending external file and open it in the viewer.
  *
- * Called by pages/viewer.js from its init(), once the viewer chrome is
- * mounted. Reads two sources of pending files:
+ * Called by `pages/viewer.js` from its `init()`. Reads two sources:
+ *   1. `sessionStorage.pendingFileOpen` — Android intent / FileOpen payload
+ *      stashed by `app.js`. On native Android, launches `MedvixPdfActivity`
+ *      directly via URI/path with zero blob copying, then navigates back
+ *      when the user closes the native viewer.
+ *   2. `_pendingLocalFile` — a browser `File` object from `<input type="file">`
+ *      or drag-drop that arrived while the viewer chrome wasn't mounted.
  *
- *   1. sessionStorage.pendingFileOpen - native payloads stashed by app.js
- *      when a cold-start or warm-start file intent arrived before the
- *      viewer page mounted.
- *
- *   2. _pendingLocalFile - a File object from the file picker or drag-drop
- *      that arrived while the viewer chrome wasn't mounted. File objects
- *      cannot be serialized, so they live in a module variable.
- *
- * The sessionStorage entry is cleared on read (idempotent). The File
- * reference is nulled on read. Returns true if a file was found and its
- * load was initiated, false if nothing was pending.
- *
- * @returns {boolean}
+ * @returns {boolean} True if a pending file was found and initiated
  */
 export function openPendingFile() {
-  // -- Source 1: native payload ------------------------------------------
+  // -- Source 1: native Android intent / FileOpen payload ------------------
   try {
     const raw = sessionStorage.getItem(PENDING_FILE_KEY);
     if (raw) {
       sessionStorage.removeItem(PENDING_FILE_KEY);
       const payload = JSON.parse(raw);
-      if (payload && payload.path) {
-        _openNativeFilePayload(payload).catch(() => { /* handled internally */ });
+      if (payload && (payload.uri || payload.path)) {
+        const nativePlugin = _getNativeViewerPlugin();
+        if (nativePlugin) {
+          _openExternalPayloadNative(nativePlugin, payload)
+            .finally(() => {
+              _handleBack();
+            });
+          return true;
+        }
+        _openNativeFilePayloadWebFallback(payload).catch(() => { /* handled internally */ });
         return true;
       }
     }
   } catch { /* ignore parse errors */ }
 
-  // -- Source 2: local File object ---------------------------------------
+  // -- Source 2: local browser File object ---------------------------------
   if (_pendingLocalFile) {
     const file = _pendingLocalFile;
     _pendingLocalFile = null;

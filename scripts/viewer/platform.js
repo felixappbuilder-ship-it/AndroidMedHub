@@ -9,8 +9,9 @@
  * does the user prefer?"
  *
  * Every other module asks THIS file — never `Capacitor.isNativePlatform()`,
- * never `navigator.userAgent`, never `window.matchMedia` directly. Swapping
- * the detection strategy later touches one file.
+ * never `Capacitor.isPluginAvailable()`, never `navigator.userAgent`, never
+ * `window.matchMedia` directly. Swapping the detection strategy later touches
+ * one file.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * MEMORY TIER CONTRACT
@@ -43,33 +44,40 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *
  * Exports:
- *   ── Enums ─────────────────────────────────────────────────────────────
- *     PLATFORM            — { ANDROID, IOS, WEB }
- *     INPUT_KIND          — { TOUCH, MOUSE, HYBRID }
- *     COLOR_SCHEME        — { LIGHT, DARK }
+ *   ── Enums & Constants ─────────────────────────────────────────────────
+ *     PLATFORM                   — { ANDROID, IOS, WEB }
+ *     INPUT_KIND                 — { TOUCH, MOUSE, HYBRID }
+ *     COLOR_SCHEME               — { LIGHT, DARK }
+ *     NATIVE_VIEWER_PLUGIN_NAME  — 'MedvixPdfViewer'
  *
  *   ── Platform predicates ───────────────────────────────────────────────
- *     isNative()          — running inside Capacitor on a real device
- *     platform()          — 'android' | 'ios' | 'web'
+ *     isNative()                 — running inside Capacitor on a real device
+ *     platform()                 — 'android' | 'ios' | 'web'
  *     isAndroid()
  *     isIOS()
  *     isWeb()
+ *
+ *   ── Native Android Viewer Bridge Predicates ───────────────────────────
+ *     hasNativePdfViewer()       — true when native MedvixPdfViewer is active
+ *     isNativeAndroidViewer()    — alias for hasNativePdfViewer()
+ *     getNativePdfViewerPlugin() — returns MedvixPdfViewer proxy or null
+ *     convertNativeFileSrc(path) — Capacitor.convertFileSrc() wrapper
  *
  *   ── Device primitives (cached) ────────────────────────────────────────
  *     hardwareConcurrency()
  *     deviceMemoryGB()
  *     isMobileUA()
- *     isLowMemoryDevice()      — mem ≤ 2 GB
+ *     isLowMemoryDevice()        — mem ≤ 2 GB
  *     isCoarsePointer()
  *     hasTouch()
  *     devicePixelRatio()
- *     getDPRClamped(max)       — clamped to [1, max]
+ *     getDPRClamped(max)         — clamped to [1, max]
  *
  *   ── Display / preference (live reads) ─────────────────────────────────
  *     prefersDarkMode()
  *     prefersReducedMotion()
  *     hasSafeAreaSupport()
- *     getSafeAreaInsets()      — best-effort, cached after first read
+ *     getSafeAreaInsets()        — best-effort, cached after first read
  *
  *   ── Network / capability ──────────────────────────────────────────────
  *     isOnline()
@@ -77,9 +85,9 @@
  *     hasWebGL()
  *
  *   ── Aggregates ────────────────────────────────────────────────────────
- *     getDeviceProfile()       — frozen snapshot for CONFIG tuning
- *     getInputProfile()        — touch/mouse/hybrid classification
- *     getPlatformSnapshot()    — everything, for diagnostics
+ *     getDeviceProfile()         — frozen snapshot for CONFIG tuning
+ *     getInputProfile()          — touch/mouse/hybrid classification
+ *     getPlatformSnapshot()      — everything, for diagnostics
  *
  *   ── Test hook ─────────────────────────────────────────────────────────
  *     __resetPlatformCacheForTests()
@@ -91,19 +99,19 @@
  *     `window` (i.e. the main thread). Worker files do not import this.
  *   • No side effects at module load. All reads happen on call.
  *   • Every function NEVER throws — a broken API returns the default.
- *   • Cached primitives (CPU cores, memory, mobile UA) never change for the
- *     life of the page. Uncached reads (DPR, dark mode, online) are cheap
- *     and may change at any time.
+ *   • Cached primitives (CPU cores, memory, mobile UA, native plugin probe)
+ *     never change for the life of the page. Uncached reads (DPR, dark mode,
+ *     online) are cheap and may change at any time.
  *
  * @module viewer/platform
  */
 
 'use strict';
 
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 
 // ============================================================================
-// 1. ENUMS
+// 1. ENUMS & CONSTANTS
 // ============================================================================
 
 /**
@@ -139,12 +147,20 @@ export const COLOR_SCHEME = Object.freeze({
   DARK: 'dark',
 });
 
+/**
+ * Registered Capacitor plugin name for the native Android PDF/Image engine.
+ * @constant {string}
+ */
+export const NATIVE_VIEWER_PLUGIN_NAME = 'MedvixPdfViewer';
+
 // ============================================================================
 // 2. INTERNAL — cached values
 // ============================================================================
 
 /** @type {boolean|null} */ let _isNativeCache = null;
 /** @type {string|null}  */ let _platformCache = null;
+/** @type {boolean|null} */ let _nativeViewerAvailableCache = null;
+/** @type {any}          */ let _nativeViewerPluginCache = undefined;
 /** @type {number|null}  */ let _coresCache = null;
 /** @type {number|null}  */ let _memoryCache = null;
 /** @type {boolean|null} */ let _mobileUACache = null;
@@ -251,7 +267,105 @@ export function isWeb() {
 }
 
 // ============================================================================
-// 5. DEVICE PRIMITIVES (cached)
+// 5. NATIVE ANDROID VIEWER CAPABILITY & BRIDGE RESOLUTION
+// ============================================================================
+
+/**
+ * True when running inside Capacitor on Android AND the native
+ * `MedvixPdfViewer` Java plugin is registered and available.
+ *
+ * When true, `viewer.js` and `native-bridge.js` route documents directly to
+ * `MedvixPdfActivity` and bypass the 13-file JS/Worker DOM viewer entirely.
+ *
+ * Cached after first call.
+ *
+ * @returns {boolean}
+ */
+export function hasNativePdfViewer() {
+  if (_nativeViewerAvailableCache !== null) return _nativeViewerAvailableCache;
+
+  try {
+    if (!isNative() || !isAndroid()) {
+      _nativeViewerAvailableCache = false;
+      return false;
+    }
+
+    if (typeof Capacitor.isPluginAvailable === 'function') {
+      _nativeViewerAvailableCache = Capacitor.isPluginAvailable(NATIVE_VIEWER_PLUGIN_NAME) === true;
+      return _nativeViewerAvailableCache;
+    }
+
+    const winPlugins = typeof window !== 'undefined' && window.Capacitor && window.Capacitor.Plugins;
+    _nativeViewerAvailableCache = Boolean(winPlugins && winPlugins[NATIVE_VIEWER_PLUGIN_NAME]);
+  } catch {
+    _nativeViewerAvailableCache = false;
+  }
+
+  return _nativeViewerAvailableCache;
+}
+
+/**
+ * Semantic alias for `hasNativePdfViewer()`.
+ *
+ * @returns {boolean}
+ */
+export function isNativeAndroidViewer() {
+  return hasNativePdfViewer();
+}
+
+/**
+ * Return the Capacitor proxy for `MedvixPdfViewer` when running on native
+ * Android with the plugin available, or `null` on Web/iOS.
+ *
+ * Cached after first resolution. Never throws.
+ *
+ * @returns {any|null}
+ */
+export function getNativePdfViewerPlugin() {
+  if (_nativeViewerPluginCache !== undefined) return _nativeViewerPluginCache;
+
+  if (!hasNativePdfViewer()) {
+    _nativeViewerPluginCache = null;
+    return null;
+  }
+
+  try {
+    let proxy = null;
+    if (typeof registerPlugin === 'function') {
+      proxy = registerPlugin(NATIVE_VIEWER_PLUGIN_NAME);
+    }
+    if (!proxy && typeof window !== 'undefined' && window.Capacitor && window.Capacitor.Plugins) {
+      proxy = window.Capacitor.Plugins[NATIVE_VIEWER_PLUGIN_NAME] || null;
+    }
+    _nativeViewerPluginCache = proxy || null;
+  } catch {
+    _nativeViewerPluginCache = null;
+  }
+
+  return _nativeViewerPluginCache;
+}
+
+/**
+ * Convert a native device filesystem path (e.g. a cached WebP cover thumbnail
+ * path returned by `MedvixPdfViewer.generateThumbnail`) into a WebView-safe
+ * URL via `Capacitor.convertFileSrc()`. Returns the original path unchanged
+ * on non-native platforms or if conversion is unavailable.
+ *
+ * @param {string} filePath
+ * @returns {string}
+ */
+export function convertNativeFileSrc(filePath) {
+  if (!filePath || typeof filePath !== 'string') return '';
+  try {
+    if (isNative() && typeof Capacitor.convertFileSrc === 'function') {
+      return Capacitor.convertFileSrc(filePath);
+    }
+  } catch { /* ignore */ }
+  return filePath;
+}
+
+// ============================================================================
+// 6. DEVICE PRIMITIVES (cached)
 // ============================================================================
 
 /**
@@ -393,7 +507,7 @@ export function getDPRClamped(max = 2) {
 }
 
 // ============================================================================
-// 6. DISPLAY / PREFERENCE (live reads)
+// 7. DISPLAY / PREFERENCE (live reads)
 // ============================================================================
 
 /**
@@ -512,7 +626,7 @@ export function getSafeAreaInsets() {
 }
 
 // ============================================================================
-// 7. NETWORK / CAPABILITY
+// 8. NETWORK / CAPABILITY
 // ============================================================================
 
 /**
@@ -574,13 +688,14 @@ export function hasWebGL() {
 }
 
 // ============================================================================
-// 8. AGGREGATE PROFILES
+// 9. AGGREGATE PROFILES
 // ============================================================================
 
 /**
  * Frozen snapshot of the device's static capabilities. Matches the shape
  * that `core.js::_detectDeviceProfile` consumes — with the addition of
- * `platform` and `isNative` so callers can classify in one pass.
+ * `platform`, `isNative`, and `hasNativeViewer` so callers can classify in
+ * one pass.
  *
  * The memory cap (`memoryCapBytes`) is NOT included here — it depends on
  * `CONFIG` in `core.js`, and this module must not import core (would create
@@ -589,6 +704,7 @@ export function hasWebGL() {
  * @returns {{
  *   platform: 'android'|'ios'|'web',
  *   isNative: boolean,
+ *   hasNativeViewer: boolean,
  *   isMobile: boolean,
  *   isLowMemory: boolean,
  *   hardwareConcurrency: number,
@@ -602,6 +718,7 @@ export function getDeviceProfile() {
   return Object.freeze({
     platform: platform(),
     isNative: isNative(),
+    hasNativeViewer: hasNativePdfViewer(),
     isMobile: isMobileUA() || isAndroid() || isIOS(),
     isLowMemory: isLowMemoryDevice(),
     hardwareConcurrency: hardwareConcurrency(),
@@ -638,6 +755,7 @@ export function getInputProfile() {
  *   isAndroid: boolean,
  *   isIOS: boolean,
  *   isWeb: boolean,
+ *   hasNativePdfViewer: boolean,
  *   isMobileUA: boolean,
  *   isStandalonePWA: boolean,
  *   isOnline: boolean,
@@ -661,6 +779,7 @@ export function getPlatformSnapshot() {
     isAndroid: isAndroid(),
     isIOS: isIOS(),
     isWeb: isWeb(),
+    hasNativePdfViewer: hasNativePdfViewer(),
     isMobileUA: isMobileUA(),
     isStandalonePWA: isStandalonePWA(),
     isOnline: isOnline(),
@@ -679,7 +798,7 @@ export function getPlatformSnapshot() {
 }
 
 // ============================================================================
-// 9. TEST HOOK
+// 10. TEST HOOK
 // ============================================================================
 
 /**
@@ -692,6 +811,8 @@ export function getPlatformSnapshot() {
 export function __resetPlatformCacheForTests() {
   _isNativeCache = null;
   _platformCache = null;
+  _nativeViewerAvailableCache = null;
+  _nativeViewerPluginCache = undefined;
   _coresCache = null;
   _memoryCache = null;
   _mobileUACache = null;

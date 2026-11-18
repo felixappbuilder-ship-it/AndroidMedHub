@@ -5,59 +5,445 @@
  * ============================================================================
  *
  * Every native call the viewer needs, over a single module. No dynamic
- * imports. No `@capacitor/*` packages. Every plugin is a Medvix Java
- * plugin, accessed synchronously via `window.Capacitor.Plugins.*`.
+ * imports. Every plugin is a Medvix Java plugin, accessed safely via
+ * `platform.js` and `globalThis.Capacitor.Plugins.*`.
  *
  * Backed by:
+ *   MedvixPdfViewer   — openDocument, getDocumentInfo, generateThumbnail,
+ *                       exportAnnotations, clearSidecarData;
+ *                       viewerClosed, unlockRequested, externalDocumentOpened
  *   MedvixApp         — backButton, appStateChange, appUrlOpen events;
  *                       getLaunchUrl(), getInfo(), exitApp()
  *   MedvixStatusBar   — enterFullscreen, exitFullscreen, setVisible,
  *                       setColor, setLightIcons
  *   MedvixKeepAwake   — keepAwake, allowSleep
  *   MedvixShare       — share, shareFile
- *   MedvixHaptics     — light, medium, heavy, vibrate  (NOT used here —
- *                       exported for other modules; the viewer does not
- *                       vibrate for any reason)
+ *   MedvixHaptics     — light, medium, heavy, vibrate  (NOT used inside the
+ *                       viewer — exported for other app modules; the
+ *                       viewer does not vibrate for any reason)
  *
  * Design contract:
- *   1. No function ever throws — broken plugin → silent no-op.
- *   2. Register functions return a SYNCHRONOUS unsubscribe.
+ *   1. No function ever throws — broken or absent plugin → silent safe fallback.
+ *   2. Register / listener functions return a SYNCHRONOUS unsubscribe.
  *   3. Fullscreen state is tracked locally. The native isFullscreen query
  *      is async, and the viewer needs a synchronous check in the back
  *      button priority chain.
+ *   4. Leaf-adjacent module — imports only from `./platform.js` so no
+ *      circular dependency with `core.js` or `viewer.js` can ever form.
  *
  * @module viewer/native-bridge
  */
 
 'use strict';
 
-import { isNative, isWeb, getSafeAreaInsets } from './platform.js';
+import {
+  isNative,
+  isWeb,
+  hasNativePdfViewer,
+  getNativePdfViewerPlugin,
+  convertNativeFileSrc,
+  getSafeAreaInsets,
+} from './platform.js';
 
 // ============================================================================
 // 0. NATIVE PLUGIN ACCESS
 // ============================================================================
 
-/** Synchronous access to a Medvix plugin. Returns null if not registered. */
+/**
+ * Synchronous access to a registered Medvix Capacitor plugin.
+ * Delegates `MedvixPdfViewer` resolution to `platform.js`; resolves other
+ * Medvix plugins via `globalThis.Capacitor.Plugins`. Never throws.
+ *
+ * @private
+ * @param {string} name
+ * @returns {any|null}
+ */
 function plugin(name) {
   try {
+    if (!isNative()) return null;
+    if (name === 'MedvixPdfViewer') {
+      return getNativePdfViewerPlugin();
+    }
     const C = globalThis.Capacitor;
-    if (!C?.isNativePlatform?.()) return null;
-    return C.Plugins?.[name] ?? null;
+    return C?.Plugins?.[name] ?? null;
   } catch {
     return null;
   }
 }
 
-/** Safe call — never throws, always resolves. */
+/**
+ * Safe async plugin invocation — never throws, always resolves to result or null.
+ *
+ * @private
+ * @param {string} pluginName
+ * @param {string} method
+ * @param {object} [args]
+ * @returns {Promise<any|null>}
+ */
 async function safeCall(pluginName, method, args) {
   const p = plugin(pluginName);
   if (!p || typeof p[method] !== 'function') return null;
-  try { return await p[method](args); }
-  catch { return null; }
+  try {
+    return await p[method](args);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Subscribe synchronously to a Capacitor plugin event, returning an idempotent
+ * unsubscribe function even if the underlying `addListener` resolves asynchronously.
+ *
+ * @private
+ * @param {string} pluginName
+ * @param {string} eventName
+ * @param {(payload: any) => void} handler
+ * @returns {() => void}
+ */
+function safeSubscribe(pluginName, eventName, handler) {
+  if (typeof handler !== 'function') return () => {};
+  const p = plugin(pluginName);
+  if (!p || typeof p.addListener !== 'function') return () => {};
+
+  let disposed = false;
+  let nativeUnsub = null;
+
+  (async () => {
+    try {
+      const sub = await p.addListener(eventName, (payload) => {
+        if (disposed) return;
+        try {
+          handler(payload);
+        } catch { /* ignore listener errors */ }
+      });
+      if (disposed) {
+        try { sub && typeof sub.remove === 'function' && sub.remove(); } catch { /* ignore */ }
+        return;
+      }
+      nativeUnsub = () => {
+        try { sub && typeof sub.remove === 'function' && sub.remove(); } catch { /* ignore */ }
+      };
+    } catch { /* ignore */ }
+  })();
+
+  return () => {
+    disposed = true;
+    if (nativeUnsub) {
+      nativeUnsub();
+      nativeUnsub = null;
+    }
+  };
 }
 
 // ============================================================================
-// 1. BACK BUTTON / LIFECYCLE
+// 1. NATIVE ANDROID PDF & IMAGE VIEWER BRIDGE (MedvixPdfViewer)
+// ============================================================================
+
+/**
+ * True when the native Android `MedvixPdfViewer` engine is available.
+ * Re-exported from `platform.js` for caller convenience.
+ *
+ * @returns {boolean}
+ */
+export function isNativeViewerAvailable() {
+  return hasNativePdfViewer();
+}
+
+/**
+ * Launch full-screen native `MedvixPdfActivity` directly against device
+ * storage or an external URI (zero base64 / blob transfer).
+ *
+ * Resolves with the structured ActivityResult payload when the user closes
+ * the native viewer or taps "Unlock Full" in preview mode:
+ *   `{ action, resourceId?, lastPageIndex, totalPages, unlockRequested }`
+ * Returns `null` if the native plugin is unavailable or the call fails.
+ *
+ * @param {{
+ *   resourceId?: string,
+ *   relativePath?: string,
+ *   absolutePath?: string,
+ *   uri?: string,
+ *   title?: string,
+ *   mimeType?: string,
+ *   previewMode?: boolean,
+ *   initialPage?: number,
+ * }} opts
+ * @returns {Promise<{
+ *   action: string,
+ *   resourceId?: string,
+ *   lastPageIndex: number,
+ *   totalPages: number,
+ *   unlockRequested: boolean,
+ * }|null>}
+ */
+export async function openNativeDocument(opts) {
+  if (!opts || !hasNativePdfViewer()) return null;
+
+  const payload = {};
+  if (opts.resourceId) payload.resourceId = String(opts.resourceId);
+  if (opts.relativePath) payload.relativePath = String(opts.relativePath);
+  if (opts.absolutePath) payload.absolutePath = String(opts.absolutePath);
+  if (opts.uri) payload.uri = String(opts.uri);
+  if (opts.title) payload.title = String(opts.title);
+  if (opts.mimeType) payload.mimeType = String(opts.mimeType);
+  if (typeof opts.previewMode === 'boolean') payload.previewMode = opts.previewMode;
+  if (typeof opts.initialPage === 'number' && opts.initialPage >= 0) {
+    payload.initialPage = Math.floor(opts.initialPage);
+  }
+
+  if (!payload.resourceId && !payload.relativePath && !payload.absolutePath && !payload.uri) {
+    return null;
+  }
+
+  const res = await safeCall('MedvixPdfViewer', 'openDocument', payload);
+  if (!res || typeof res !== 'object') return null;
+
+  return {
+    action: typeof res.action === 'string' ? res.action : 'closed',
+    resourceId: typeof res.resourceId === 'string' ? res.resourceId : undefined,
+    lastPageIndex: typeof res.lastPageIndex === 'number' ? res.lastPageIndex : 0,
+    totalPages: typeof res.totalPages === 'number' ? res.totalPages : 0,
+    unlockRequested: Boolean(res.unlockRequested || res.action === 'unlock_subscription'),
+  };
+}
+
+/**
+ * Inspect file existence, metadata, storage location, saved reading state,
+ * bookmarks count, and annotations count without opening the viewer UI.
+ * Never throws; returns `{ exists: false }` when missing or unavailable.
+ *
+ * @param {{
+ *   resourceId?: string,
+ *   relativePath?: string,
+ *   absolutePath?: string,
+ *   uri?: string,
+ *   title?: string,
+ *   mimeType?: string,
+ * }} opts
+ * @returns {Promise<{
+ *   exists: boolean,
+ *   slugId?: string,
+ *   resourceId?: string,
+ *   displayName?: string,
+ *   mimeType?: string,
+ *   byteLength?: number,
+ *   isPdf?: boolean,
+ *   isImage?: boolean,
+ *   isRemovableStorage?: boolean,
+ *   absolutePath?: string,
+ *   readerState?: object,
+ *   bookmarksCount?: number,
+ *   annotationsCount?: number,
+ *   hasAnnotations?: boolean,
+ * }>}
+ */
+export async function getNativeDocumentInfo(opts) {
+  if (!opts || !hasNativePdfViewer()) return { exists: false };
+
+  const res = await safeCall('MedvixPdfViewer', 'getDocumentInfo', {
+    resourceId: opts.resourceId || undefined,
+    relativePath: opts.relativePath || undefined,
+    absolutePath: opts.absolutePath || undefined,
+    uri: opts.uri || undefined,
+    title: opts.title || undefined,
+    mimeType: opts.mimeType || undefined,
+  });
+
+  if (!res || typeof res !== 'object') return { exists: false };
+  return {
+    ...res,
+    exists: Boolean(res.exists),
+  };
+}
+
+/**
+ * Generate or fetch a cached WebP cover thumbnail in `cache/thumbnails/`
+ * and attach a WebView-displayable `src` via `Capacitor.convertFileSrc()`.
+ * Never throws; returns `null` on failure or non-Android platforms.
+ *
+ * @param {{
+ *   resourceId?: string,
+ *   relativePath?: string,
+ *   absolutePath?: string,
+ *   uri?: string,
+ *   title?: string,
+ *   mimeType?: string,
+ *   password?: string,
+ *   maxDimension?: number,
+ * }} opts
+ * @returns {Promise<{
+ *   path: string,
+ *   src: string,
+ *   width?: number,
+ *   height?: number,
+ *   pageCount?: number,
+ *   cached: boolean,
+ * }|null>}
+ */
+export async function generateNativeThumbnail(opts) {
+  if (!opts || !hasNativePdfViewer()) return null;
+
+  const res = await safeCall('MedvixPdfViewer', 'generateThumbnail', {
+    resourceId: opts.resourceId || undefined,
+    relativePath: opts.relativePath || undefined,
+    absolutePath: opts.absolutePath || undefined,
+    uri: opts.uri || undefined,
+    title: opts.title || undefined,
+    mimeType: opts.mimeType || undefined,
+    password: opts.password || undefined,
+    maxDimension: typeof opts.maxDimension === 'number' ? opts.maxDimension : 360,
+  });
+
+  if (!res || typeof res.path !== 'string' || !res.path) return null;
+
+  return {
+    path: res.path,
+    src: convertNativeFileSrc(res.path),
+    width: typeof res.width === 'number' ? res.width : undefined,
+    height: typeof res.height === 'number' ? res.height : undefined,
+    pageCount: typeof res.pageCount === 'number' ? res.pageCount : undefined,
+    cached: Boolean(res.cached),
+  };
+}
+
+/**
+ * Export all saved bookmarks, highlights, study notes, and freehand ink
+ * strokes from the document's sidecar store as JSON for cloud backup/sync.
+ *
+ * @param {{
+ *   resourceId?: string,
+ *   relativePath?: string,
+ *   absolutePath?: string,
+ *   uri?: string,
+ * }} opts
+ * @returns {Promise<{ slugId: string, annotationsJson: string }|null>}
+ */
+export async function exportNativeAnnotations(opts) {
+  if (!opts || !hasNativePdfViewer()) return null;
+
+  const res = await safeCall('MedvixPdfViewer', 'exportAnnotations', {
+    resourceId: opts.resourceId || undefined,
+    relativePath: opts.relativePath || undefined,
+    absolutePath: opts.absolutePath || undefined,
+    uri: opts.uri || undefined,
+  });
+
+  if (!res || typeof res.annotationsJson !== 'string') return null;
+  return {
+    slugId: String(res.slugId || ''),
+    annotationsJson: res.annotationsJson,
+  };
+}
+
+/**
+ * Delete `reader_state.json` and `annotations.json` sidecar files for a
+ * document on native Android storage.
+ *
+ * @param {{
+ *   resourceId?: string,
+ *   relativePath?: string,
+ *   absolutePath?: string,
+ *   uri?: string,
+ * }} opts
+ * @returns {Promise<boolean>}
+ */
+export async function clearNativeSidecarData(opts) {
+  if (!opts || !hasNativePdfViewer()) return false;
+
+  const res = await safeCall('MedvixPdfViewer', 'clearSidecarData', {
+    resourceId: opts.resourceId || undefined,
+    relativePath: opts.relativePath || undefined,
+    absolutePath: opts.absolutePath || undefined,
+    uri: opts.uri || undefined,
+  });
+
+  return Boolean(res && res.cleared);
+}
+
+/**
+ * Subscribe to `MedvixPdfViewer` closing (`viewerClosed` event).
+ * Returns a synchronous unsubscribe function.
+ *
+ * @param {(payload: {
+ *   action: string,
+ *   resourceId?: string,
+ *   lastPageIndex: number,
+ *   totalPages: number,
+ *   unlockRequested: boolean,
+ * }) => void} handler
+ * @returns {() => void}
+ */
+export function onNativeViewerClosed(handler) {
+  return safeSubscribe('MedvixPdfViewer', 'viewerClosed', (raw) => {
+    const r = raw || {};
+    handler({
+      action: typeof r.action === 'string' ? r.action : 'closed',
+      resourceId: typeof r.resourceId === 'string' ? r.resourceId : undefined,
+      lastPageIndex: typeof r.lastPageIndex === 'number' ? r.lastPageIndex : 0,
+      totalPages: typeof r.totalPages === 'number' ? r.totalPages : 0,
+      unlockRequested: Boolean(r.unlockRequested || r.action === 'unlock_subscription'),
+    });
+  });
+}
+
+/**
+ * Subscribe to `MedvixPdfViewer` paywall upgrade requests (`unlockRequested`
+ * event fired when a user taps "Unlock Full" inside preview mode).
+ * Returns a synchronous unsubscribe function.
+ *
+ * @param {(payload: {
+ *   resourceId?: string,
+ *   lastPageIndex: number,
+ *   totalPages: number,
+ * }) => void} handler
+ * @returns {() => void}
+ */
+export function onNativeUnlockRequested(handler) {
+  return safeSubscribe('MedvixPdfViewer', 'unlockRequested', (raw) => {
+    const r = raw || {};
+    handler({
+      resourceId: typeof r.resourceId === 'string' ? r.resourceId : undefined,
+      lastPageIndex: typeof r.lastPageIndex === 'number' ? r.lastPageIndex : 0,
+      totalPages: typeof r.totalPages === 'number' ? r.totalPages : 0,
+    });
+  });
+}
+
+/**
+ * Subscribe to warm-start external `ACTION_VIEW` document intents delivered
+ * to `MedvixPdfViewerPlugin` (`externalDocumentOpened`).
+ * Returns a synchronous unsubscribe function.
+ *
+ * @param {(payload: { uri: string, mimeType?: string }) => void} handler
+ * @returns {() => void}
+ */
+export function onExternalDocumentOpened(handler) {
+  return safeSubscribe('MedvixPdfViewer', 'externalDocumentOpened', (raw) => {
+    if (!raw || typeof raw.uri !== 'string' || !raw.uri) return;
+    handler({
+      uri: raw.uri,
+      mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : undefined,
+    });
+  });
+}
+
+/**
+ * Grouped namespace object for callers preferring object-style imports.
+ */
+export const NativePdfViewer = Object.freeze({
+  isAvailable: isNativeViewerAvailable,
+  openDocument: openNativeDocument,
+  getDocumentInfo: getNativeDocumentInfo,
+  generateThumbnail: generateNativeThumbnail,
+  exportAnnotations: exportNativeAnnotations,
+  clearSidecarData: clearNativeSidecarData,
+  onViewerClosed: onNativeViewerClosed,
+  onUnlockRequested: onNativeUnlockRequested,
+  onExternalDocumentOpened,
+});
+
+// ============================================================================
+// 2. BACK BUTTON / LIFECYCLE (MedvixApp)
 // ============================================================================
 
 /**
@@ -135,7 +521,7 @@ export function onAppStateChange(handler) {
     try {
       if (!p || typeof p.addListener !== 'function') return;
       const sub = await p.addListener('appStateChange', (state) => {
-        try { handler({ isActive: !!state.isActive }); } catch { /* ignore */ }
+        try { handler({ isActive: !!(state && state.isActive) }); } catch { /* ignore */ }
       });
       if (disposed) { try { sub.remove(); } catch { /* ignore */ } return; }
       nativeUnsub = () => { try { sub.remove(); } catch { /* ignore */ } };
@@ -146,7 +532,7 @@ export function onAppStateChange(handler) {
 }
 
 // ============================================================================
-// 2. INTENTS
+// 3. INTENTS (MedvixApp)
 // ============================================================================
 
 /**
@@ -190,7 +576,7 @@ export function registerAppUrlOpen(handler) {
 }
 
 // ============================================================================
-// 3. FULLSCREEN / IMMERSIVE
+// 4. FULLSCREEN / IMMERSIVE (MedvixStatusBar)
 // ============================================================================
 
 /** Local fullscreen tracker — updated by enter/exit, queried synchronously. */
@@ -231,7 +617,7 @@ export function isFullscreen() {
 }
 
 // ============================================================================
-// 4. STATUS BAR
+// 5. STATUS BAR (MedvixStatusBar)
 // ============================================================================
 
 /**
@@ -256,7 +642,7 @@ export async function setStatusBarStyle(opts) {
 }
 
 // ============================================================================
-// 5. KEEP AWAKE
+// 6. KEEP AWAKE (MedvixKeepAwake)
 // ============================================================================
 
 /**
@@ -278,7 +664,7 @@ export async function allowSleep() {
 }
 
 // ============================================================================
-// 6. SHARE / OPEN-WITH
+// 7. SHARE / OPEN-WITH (MedvixShare)
 // ============================================================================
 
 /**
@@ -298,11 +684,9 @@ export async function share(opts) {
 }
 
 /**
- * Share a Blob via the system share sheet.
- *
- * The blob is base64-encoded in JS, passed to MedvixShare.shareFile,
- * which writes it to the app cache and fires the chooser with the
- * content:// URI attached.
+ * Share a Blob via the system share sheet (Web/PWA fallback path).
+ * Note: On native Android, `MedvixPdfActivity` shares files directly via
+ * Android `FileProvider` without base64 encoding.
  *
  * @param {{
  *   blob: Blob,
@@ -354,7 +738,7 @@ function _blobToBase64(blob) {
 }
 
 // ============================================================================
-// 7. HAPTICS
+// 8. HAPTICS (MedvixHaptics)
 // ============================================================================
 //
 // Exported for use elsewhere in the app. THE VIEWER DOES NOT CALL THESE.
@@ -362,9 +746,6 @@ function _blobToBase64(blob) {
 // the document viewer is silent. If a future feature needs haptics
 // (destructive-action confirmations, form validation, etc.), import the
 // functions from this module and call them from that feature's code.
-//
-// Kept here so every native call in the app goes through one module and
-// one set of Medvix plugins.
 
 /** @returns {Promise<void>} */
 export async function vibrate(pattern) {
@@ -382,7 +763,7 @@ export async function hapticMedium() { await safeCall('MedvixHaptics', 'medium')
 export async function hapticHeavy()  { await safeCall('MedvixHaptics', 'heavy');  }
 
 // ============================================================================
-// 8. ENVIRONMENT SUBSCRIPTIONS
+// 9. ENVIRONMENT SUBSCRIPTIONS
 // ============================================================================
 
 /**
@@ -488,16 +869,16 @@ export function onSafeAreaChange(handler) {
 }
 
 // ============================================================================
-// 9. BOOTSTRAP
+// 10. BOOTSTRAP (Web/PWA DOM Viewer Core Only)
 // ============================================================================
 
 /**
- * Wire every native-only feature the viewer needs. Returns a single
- * teardown function that unsubscribes everything.
+ * Wire every native-only feature the Web DOM viewer core needs. Returns a
+ * single teardown function that unsubscribes everything.
  *
- * The viewer does not use haptics. This bootstrap wires back button,
- * app state, file intents, color scheme, network status, and the
- * document loaded/destroyed keep-awake cycle. No vibration anywhere.
+ * Note: When `hasNativePdfViewer()` is true on Android, `viewer.js` routes
+ * documents directly to `MedvixPdfActivity` and never boots `core.js`, so
+ * this bootstrap is only invoked for the Web/PWA fallback viewer.
  *
  * @param {import('./core.js').ViewerCore} core
  * @returns {() => void}  teardown
@@ -605,7 +986,7 @@ export function setupNativeBridge(core) {
 }
 
 // ============================================================================
-// 10. TEST HOOK
+// 11. TEST HOOK
 // ============================================================================
 
 /**

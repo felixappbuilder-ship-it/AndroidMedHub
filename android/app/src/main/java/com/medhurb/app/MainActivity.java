@@ -17,6 +17,7 @@ import com.android.installreferrer.api.InstallReferrerClient;
 import com.android.installreferrer.api.InstallReferrerStateListener;
 import com.android.installreferrer.api.ReferrerDetails;
 import com.getcapacitor.BridgeActivity;
+import com.medhurb.app.viewer.bridge.MedvixPdfViewerPlugin;
 
 import ee.forgr.capacitor.social.login.ModifiedMainActivityForSocialLoginPlugin;
 
@@ -64,19 +65,24 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
         //   • AppUpdatePlugin         — Google Play in-app updates.
         //   • FileOpenPlugin          — files the OS hands to the app via
         //                               the "Open with" chooser.
+        //   • MedVixPdfExportPlugin   — silent HTML-to-PDF vector exporter.
         //   • MedvixDevicePlugin      — device identity + metadata.
         //   • MedvixAppPlugin         — deep links, lifecycle, app info,
         //                               back-button dispatch.
         //   • MedvixOrientationPlugin — portrait lock during splash.
         //   • MedvixReviewPlugin      — Google Play in-app review sheet.
         //
-        //   Viewer-side (scripts/viewer/native-bridge.js):
+        //   Viewer-side (scripts/viewer.js, scripts/viewer/native-bridge.js):
+        //   • MedvixPdfViewerPlugin   — native Android PDF & Image reader,
+        //                               annotations, bookmarks & thumbnails.
         //   • MedvixStatusBarPlugin   — immersive mode, status bar control.
         //   • MedvixKeepAwakePlugin   — screen wake lock.
         //   • MedvixSharePlugin       — text + file share sheet.
         //   • MedvixHapticsPlugin     — vibration / haptic feedback.
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(FileOpenPlugin.class);
+        registerPlugin(MedVixPdfExportPlugin.class);
+        registerPlugin(MedvixPdfViewerPlugin.class);
         registerPlugin(MedvixDevicePlugin.class);
         registerPlugin(MedvixAppPlugin.class);
         registerPlugin(MedvixOrientationPlugin.class);
@@ -274,14 +280,15 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
         // ── Cold-start file open ────────────────────────────────────────
         //
         // If the app was launched by a file-open intent (the user tapped a
-        // PDF in Files and chose MedVix), the intent arrives here before
-        // the WebView has parsed. FileOpenPlugin stashes the URI for
-        // viewer.js to drain via getPendingFile() once it loads.
+        // PDF in Files and chose MedVix), passing `this` launches native
+        // MedvixPdfActivity immediately with zero-copy URI forwarding
+        // before the WebView even finishes parsing. Falls back to JS
+        // getPendingFile() automatically if native launch is unavailable.
         //
         // Safe to call unconditionally: a normal launcher tap produces an
         // intent with action MAIN, which FileOpenPlugin.extractUris()
         // filters out.
-        FileOpenPlugin.deliverIntent(getIntent());
+        FileOpenPlugin.deliverIntent(this, getIntent());
     }
 
     @Override
@@ -307,10 +314,9 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
         // ── Warm-start file open ────────────────────────────────────────
         //
         // The app is already running. If the intent carries a file URI,
-        // FileOpenPlugin dispatches it immediately via notifyListeners,
-        // and viewer.js's persistent 'fileOpen' handler loads it into the
-        // running instance — replacing whatever document was on screen.
-        FileOpenPlugin.deliverIntent(intent);
+        // FileOpenPlugin launches MedvixPdfActivity directly in Java
+        // (or falls back to notifyListeners('fileOpen') if needed).
+        FileOpenPlugin.deliverIntent(this, intent);
 
         // ── Warm-start deep link ────────────────────────────────────────
         //
