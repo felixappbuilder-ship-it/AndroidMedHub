@@ -231,7 +231,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     });
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable chromeAutoHideRunnable = () -> {
-        if (chromeVisible && !shouldPauseChromeAutoHide()) {
+        if (this.chromeVisible && !shouldPauseChromeAutoHide()) {
             setChromeVisible(false, true);
         }
     };
