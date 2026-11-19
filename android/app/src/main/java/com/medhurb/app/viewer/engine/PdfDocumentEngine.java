@@ -53,7 +53,12 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -445,8 +450,42 @@ public final class PdfDocumentEngine implements AutoCloseable {
             Collections.synchronizedMap(new HashMap<>());
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
-    private final ExecutorService interactiveExecutor;
+    private static final class PrioritizedFutureTask<T> extends FutureTask<T>
+            implements Comparable<PrioritizedFutureTask<?>> {
+        private final int priorityScore; // 0 = currently visible in viewport, 1 = adjacent, 2 = background
+        private final long sequence;
+
+        PrioritizedFutureTask(@NonNull Runnable runnable, T result, int priorityScore, long sequence) {
+            super(runnable, result);
+            this.priorityScore = priorityScore;
+            this.sequence = sequence;
+        }
+
+        @Override
+        public int compareTo(@NonNull PrioritizedFutureTask<?> other) {
+            int cmp = Integer.compare(this.priorityScore, other.priorityScore);
+            if (cmp != 0) return cmp;
+            // LIFO within the same tier so the pages currently in front of the user render first
+            return Long.compare(other.sequence, this.sequence);
+        }
+    }
+
+    private static final RenderCallback NO_OP_RENDER_CALLBACK = new RenderCallback() {
+        @Override
+        public void onRenderSuccess(@NonNull RenderRequest request, @NonNull ManagedBitmap bitmapLease) {
+            bitmapLease.release();
+        }
+
+        @Override
+        public void onRenderError(@NonNull RenderRequest request, @NonNull Throwable error) {
+        }
+    };
+
+    private final ThreadPoolExecutor interactiveExecutor;
     private final ExecutorService backgroundExecutor;
+    private final AtomicLong renderSequence = new AtomicLong(0L);
+    private volatile int visibleStartPage = 0;
+    private volatile int visibleEndPage = 1;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     // ── Construction & Factory ───────────────────────────────────────────────
@@ -473,11 +512,18 @@ public final class PdfDocumentEngine implements AutoCloseable {
                 : totalPageCount;
         this.metricsCache = new PageMetrics[this.totalPageCount];
 
-        this.interactiveExecutor = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "MedvixPdf-Interactive-" + docKey);
-            t.setPriority(Thread.NORM_PRIORITY + 1);
-            return t;
-        });
+        this.interactiveExecutor = new ThreadPoolExecutor(
+                2,
+                2,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new PriorityBlockingQueue<>(),
+                r -> {
+                    Thread t = new Thread(r, "MedvixPdf-Interactive-" + docKey);
+                    t.setPriority(Thread.NORM_PRIORITY + 1);
+                    return t;
+                }
+        );
         this.backgroundExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "MedvixPdf-Background-" + docKey);
             t.setPriority(Thread.MIN_PRIORITY + 1);
@@ -734,8 +780,7 @@ public final class PdfDocumentEngine implements AutoCloseable {
             return handle;
         }
 
-        ExecutorService pool = request.highPriority ? interactiveExecutor : backgroundExecutor;
-        Future<?> future = pool.submit(() -> {
+        Runnable renderTask = () -> {
             if (handle.isCancelled() || closed.get()) return;
             try {
                 ManagedBitmap lease = renderInternal(request, handle);
@@ -757,10 +802,65 @@ public final class PdfDocumentEngine implements AutoCloseable {
                     mainHandler.post(() -> callback.onRenderError(request, error));
                 }
             }
-        });
+        };
 
-        handle.attachFuture(future);
+        int priorityScore = computeRenderPriorityScore(request);
+        if (request.highPriority || priorityScore == 0) {
+            PrioritizedFutureTask<Void> prioritized = new PrioritizedFutureTask<>(
+                    renderTask, null, priorityScore, renderSequence.incrementAndGet());
+            interactiveExecutor.execute(prioritized);
+            handle.attachFuture(prioritized);
+        } else {
+            Future<?> future = backgroundExecutor.submit(renderTask);
+            handle.attachFuture(future);
+        }
         return handle;
+    }
+
+    private int computeRenderPriorityScore(@NonNull RenderRequest request) {
+        if (request.forPrint) return 0;
+        int start = this.visibleStartPage;
+        int end = this.visibleEndPage;
+        if (request.pageIndex >= start && request.pageIndex <= end) {
+            return 0;
+        }
+        if (Math.abs(request.pageIndex - start) <= 1 || Math.abs(request.pageIndex - end) <= 1) {
+            return 1;
+        }
+        return 2;
+    }
+
+    /**
+     * Updates the active [firstVisiblePage..lastVisiblePage] viewport window and
+     * immediately pre-warms every visible page in BitmapMemoryPool at top priority.
+     */
+    public void setVisiblePageRange(int firstVisiblePage,
+                                    int lastVisiblePage,
+                                    float renderScale,
+                                    int rotationDegrees) {
+        if (closed.get() || totalPageCount <= 0) return;
+        int safeStart = Math.max(0, Math.min(totalPageCount - 1, firstVisiblePage));
+        int safeEnd = Math.max(safeStart, Math.min(totalPageCount - 1, lastVisiblePage));
+        this.visibleStartPage = safeStart;
+        this.visibleEndPage = safeEnd;
+
+        if (renderScale > 0.05f) {
+            int maxAccessibleVisible = Math.min(safeEnd, accessiblePageCount - 1);
+            for (int p = safeStart; p <= maxAccessibleVisible; p++) {
+                RenderRequest req = new RenderRequest.Builder(p)
+                        .setScale(renderScale)
+                        .setRotation(rotationDegrees)
+                        .setKind(RenderKind.FULL_PAGE)
+                        .setHighPriority(true)
+                        .build();
+                ManagedBitmap hit = acquireCachedBitmap(req);
+                if (hit != null) {
+                    hit.release();
+                } else {
+                    renderAsync(req, NO_OP_RENDER_CALLBACK);
+                }
+            }
+        }
     }
 
     /**
@@ -1215,13 +1315,6 @@ public final class PdfDocumentEngine implements AutoCloseable {
                     for (PdfPageTextContent c : contents) {
                         if (c != null && c.getBounds() != null) {
                             allBounds.addAll(c.getBounds());
-                        }
-                    }
-                }
-                if (allBounds.isEmpty() && selection.getBounds() != null) {
-                    for (PageMatchBounds mb : selection.getBounds()) {
-                        if (mb != null && mb.getBounds() != null) {
-                            allBounds.addAll(mb.getBounds());
                         }
                     }
                 }

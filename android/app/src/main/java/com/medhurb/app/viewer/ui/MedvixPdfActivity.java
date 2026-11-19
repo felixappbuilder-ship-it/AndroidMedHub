@@ -550,6 +550,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         pdfRecyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
+                notifyVisiblePagesToEngine();
                 if (!userDraggingScrubber) {
                     syncCurrentPageFromScroll();
                 }
@@ -557,6 +558,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
             @Override
             public void onScrollStateChanged(@NonNull RecyclerView recyclerView, int newState) {
+                notifyVisiblePagesToEngine();
                 if (newState == RecyclerView.SCROLL_STATE_IDLE) {
                     syncCurrentPageFromScroll();
                     persistCurrentViewportState();
@@ -2085,6 +2087,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
                 pdfRecyclerView.scrollToPosition(startPage);
             }
             pdfPageAdapter.onFocusedPageChanged(startPage);
+            pdfRecyclerView.post(this::notifyVisiblePagesToEngine);
         }
 
         documentOutlineItems.clear();
@@ -2258,8 +2261,34 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             if (pdfPageAdapter != null) {
                 pdfPageAdapter.onFocusedPageChanged(clamped);
             }
+            pdfRecyclerView.post(this::notifyVisiblePagesToEngine);
         }
         persistCurrentViewportState();
+    }
+
+    private void notifyVisiblePagesToEngine() {
+        if (pdfEngine == null || pdfLayoutManager == null || pdfRecyclerView.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        int firstVisible = pdfLayoutManager.findFirstVisibleItemPosition();
+        int lastVisible = pdfLayoutManager.findLastVisibleItemPosition();
+        if (firstVisible == RecyclerView.NO_POSITION || lastVisible == RecyclerView.NO_POSITION) {
+            firstVisible = currentPageIndex;
+            lastVisible = Math.min(Math.max(0, getTotalPageCount() - 1), currentPageIndex + 1);
+        }
+
+        int paddedWidth = pdfRecyclerView.getWidth()
+                - pdfRecyclerView.getPaddingLeft()
+                - pdfRecyclerView.getPaddingRight();
+        float viewWidthPx = paddedWidth > 0
+                ? paddedWidth
+                : Math.max(1f, getResources().getDisplayMetrics().widthPixels - dp(6));
+
+        PdfDocumentEngine.PageMetrics refMetrics = pdfEngine.getEstimatedPageMetrics(firstVisible);
+        float rotWidthPt = Math.max(1f, refMetrics.getRotatedWidthPt(rotationDegrees));
+        float targetScale = (viewWidthPx / rotWidthPt) * Math.max(1.0f, currentZoomScale);
+
+        pdfEngine.setVisiblePageRange(firstVisible, lastVisible, targetScale, rotationDegrees);
     }
 
     private void updatePreviewBlockedOverlayState(int pageIndex) {
