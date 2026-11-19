@@ -93,9 +93,9 @@
 
             </activity>
 
-        <!-- ===== Native PDF & Image Viewer Activity ===== -->
+<!-- ===== Native PDF & Image Viewer Activity ===== -->
         <activity
-            android:name=".viewer.ui.MedvixPdfActivity"
+            android:name="com.medhurb.app.viewer.ui.MedvixPdfActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:exported="true"
             android:label="@string/app_name"
