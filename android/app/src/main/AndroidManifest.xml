@@ -129,6 +129,29 @@
             -->
         </activity>
 
+        <!-- ===== Native document viewer Activity =====
+             Hosted by com.medhurb.app.viewer.ui.MedvixPdfActivity and launched
+             from Java (MedvixPdfViewerPlugin.openDocument / FileOpenPlugin) via
+             startActivityForResult(). It is NOT exported: only our own code
+             starts it, so no intent-filters are required — but Android still
+             refuses to launch any Activity that is absent from the manifest.
+             Without this entry the launch throws
+             ActivityNotFoundException inside the Capacitor plugin, the JS call
+             rejects immediately, resource-browser.js restores its Open button,
+             and the user sees the spinner start and stop with no viewer UI.
+
+             configChanges mirrors MainActivity so rotation / dark-mode / split-
+             screen changes never recreate the Activity (which would reload the
+             whole PdfRenderer document). No explicit theme: the application's
+             AppTheme (a Theme.AppCompat descendant) applies, which is required
+             because MedvixPdfActivity extends AppCompatActivity. -->
+        <activity
+            android:name="com.medhurb.app.viewer.ui.MedvixPdfActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:launchMode="singleTop" />
+
         <!-- ===== File provider for sharing/printing PDFs ===== -->
         <provider
             android:name="androidx.core.content.FileProvider"
