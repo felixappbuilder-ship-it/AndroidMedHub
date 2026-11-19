@@ -22,6 +22,7 @@ import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -137,6 +138,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
     private static final long CHROME_ANIM_DURATION_MS       = 260L;
     private static final long DRAWER_ANIM_DURATION_MS       = 250L;
+    private static final long CHROME_INACTIVITY_TIMEOUT_MS  = 3500L;
     private static final FastOutSlowInInterpolator CHROME_INTERPOLATOR = new FastOutSlowInInterpolator();
 
     private static final int COLOR_HIGHLIGHT_YELLOW         = Color.argb(115, 255, 235, 59);
@@ -228,6 +230,11 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         return t;
     });
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable chromeAutoHideRunnable = () -> {
+        if (chromeVisible && !shouldPauseChromeAutoHide()) {
+            setChromeVisible(false, true);
+        }
+    };
 
     // ── Local File Picker Launcher (HTML #viewer-open-local) ─────────────────
 
@@ -246,6 +253,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     @NonNull private FitMode fitMode = FitMode.FIT_WIDTH;
     private boolean keepScreenOn = true;
     private boolean previewMode = false;
+    private boolean isExternalDocument = false;
 
     private boolean chromeVisible = true;
     private boolean searchBarOpen = false;
@@ -305,9 +313,11 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     // HTML Dropdown Menu (#viewer-menu)
     private LinearLayout dropdownMenuCard;
     private TextView menuItemPageView;
+    private TextView menuItemOpenFile;
     private TextView menuItemFullscreen;
     private TextView menuItemUiTheme;
     private TextView menuItemKeepAwake;
+    private TextView menuItemPrint;
     private TextView menuItemShare;
     private TextView menuItemUnlock;
 
@@ -362,6 +372,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
     // Floating Text Selection Context Menu
     private LinearLayout selectionActionPopup;
+    private TextView btnSelectionCopy;
 
     // ── Activity Lifecycle ───────────────────────────────────────────────────
 
@@ -372,6 +383,10 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
+
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().hide();
+        }
 
         this.darkUiMode = resolveInitialDarkUiMode(getIntent());
         this.palette = new UiPalette(darkUiMode);
@@ -396,7 +411,14 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        resetChromeAutoHideTimer();
+    }
+
+    @Override
     protected void onPause() {
+        cancelChromeAutoHideTimer();
         super.onPause();
         if (documentStore != null) {
             documentStore.flushNowSync();
@@ -405,6 +427,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
     @Override
     protected void onDestroy() {
+        cancelChromeAutoHideTimer();
         unregisterMediaEjectReceiver();
         if (activeSearchTask != null) {
             activeSearchTask.cancel();
@@ -420,7 +443,17 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         }
         super.onDestroy();
     }
-
+@Override
+    public boolean dispatchTouchEvent(@NonNull MotionEvent ev) {
+        int action = ev.getActionMasked();
+        if (chromeVisible && (action == MotionEvent.ACTION_DOWN
+                || action == MotionEvent.ACTION_MOVE
+                || action == MotionEvent.ACTION_UP
+                || action == MotionEvent.ACTION_CANCEL)) {
+            resetChromeAutoHideTimer();
+        }
+        return super.dispatchTouchEvent(ev);
+    }
     @Override
     public void finish() {
         prepareActivityResult();
@@ -788,14 +821,16 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             toggleScrollMode();
         });
         menu.addView(menuItemPageView);
-        menu.addView(createDropdownMenuItem("📂", "Open file", v -> {
+        menuItemOpenFile = createDropdownMenuItem("📂", "Open file", v -> {
             closeOverflowMenu();
-            if (openLocalFileLauncher != null) {
+            if (isExternalDocument && openLocalFileLauncher != null) {
                 openLocalFileLauncher.launch(new String[]{
                         "application/pdf", "image/*"
                 });
             }
-        }));
+        });
+        menuItemOpenFile.setVisibility(View.GONE);
+        menu.addView(menuItemOpenFile);
 
         menu.addView(createMenuDivider());
 
@@ -841,15 +876,18 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         });
         menu.addView(menuItemKeepAwake);
 
-        menu.addView(createDropdownMenuItem("⎙", "Print / Save as PDF", v -> {
+        menuItemPrint = createDropdownMenuItem("⎙", "Print / Save as PDF", v -> {
             closeOverflowMenu();
             triggerNativePrint();
-        }));
+        });
+        menuItemPrint.setVisibility(View.GONE);
+        menu.addView(menuItemPrint);
 
         menuItemShare = createDropdownMenuItem("↗", "Share document", v -> {
             closeOverflowMenu();
             shareBackingDocumentFile();
         });
+        menuItemShare.setVisibility(View.GONE);
         menu.addView(menuItemShare);
 
         menuItemUnlock = createDropdownMenuItem("⭐", "Unlock full document", v -> {
@@ -892,6 +930,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         } else {
             updateMenuDynamicLabels();
             overflowMenuOpen = true;
+            cancelChromeAutoHideTimer();
             dropdownMenuCard.setVisibility(View.VISIBLE);
             dropdownMenuCard.setAlpha(0f);
             dropdownMenuCard.animate().alpha(1f).setDuration(150L).start();
@@ -902,6 +941,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         if (!overflowMenuOpen) return;
         overflowMenuOpen = false;
         dropdownMenuCard.setVisibility(View.GONE);
+        resetChromeAutoHideTimer();
     }
 
     private void updateMenuDynamicLabels() {
@@ -916,10 +956,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         if (menuItemKeepAwake != null) {
             menuItemKeepAwake.setText((keepScreenOn ? "✓   " : "     ") + "Keep screen on");
         }
-        if (menuItemShare != null) {
-            boolean canShare = resolvedDoc != null && resolvedDoc.hasBackingFile() && !previewMode;
-            menuItemShare.setVisibility(canShare ? View.VISIBLE : View.GONE);
-        }
+        applyExternalDocumentRestrictions();
         if (menuItemUnlock != null) {
             menuItemUnlock.setVisibility(previewMode ? View.VISIBLE : View.GONE);
         }
@@ -1062,6 +1099,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
         if (!drawerOpen) {
             drawerOpen = true;
+            cancelChromeAutoHideTimer();
             drawerScrimView.setVisibility(View.VISIBLE);
             drawerScrimView.animate().alpha(1f).setDuration(DRAWER_ANIM_DURATION_MS).start();
 
@@ -1079,6 +1117,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     private void closeDrawer(boolean animate) {
         if (!drawerOpen) return;
         drawerOpen = false;
+        resetChromeAutoHideTimer();
         int width = sideDrawerContainer.getLayoutParams().width;
 
         if (!animate) {
@@ -1321,24 +1360,25 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackgroundColor(Color.rgb(30, 58, 138));
-        row.setPadding(dp(14), dp(8), dp(12), dp(8));
+        row.setBackgroundColor(palette.bgSecondary);
+        row.setPadding(dp(12), dp(5), dp(10), dp(5));
 
         previewBannerLabel = new TextView(this);
-        previewBannerLabel.setText("Preview Mode — First 10% unlocked");
-        previewBannerLabel.setTextColor(Color.WHITE);
-        previewBannerLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        previewBannerLabel.setText("🔒 Preview — 10% unlocked");
+        previewBannerLabel.setTextColor(palette.textSecondary);
+        previewBannerLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+        previewBannerLabel.setTypeface(Typeface.DEFAULT_BOLD);
         LinearLayout.LayoutParams lblLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         row.addView(previewBannerLabel, lblLp);
 
         TextView unlockBtn = new TextView(this);
-        unlockBtn.setText("Unlock Full");
-        unlockBtn.setTextColor(Color.rgb(17, 24, 39));
-        unlockBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+        unlockBtn.setText("Unlock");
+        unlockBtn.setTextColor(Color.WHITE);
+        unlockBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
         unlockBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        unlockBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
-        unlockBtn.setBackground(createRoundedRectDrawable(Color.rgb(250, 204, 21), dp(14)));
+        unlockBtn.setPadding(dp(10), dp(4), dp(10), dp(4));
+        unlockBtn.setBackground(createRoundedRectDrawable(palette.accent, dp(12)));
         unlockBtn.setOnClickListener(v -> triggerUnlockSubscription());
         row.addView(unlockBtn);
 
@@ -1426,9 +1466,18 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
                     && event.getAction() == KeyEvent.ACTION_DOWN)) {
                 commitPageInputJump();
                 hideKeyboard(pageNumberInput);
+                pageNumberInput.clearFocus();
+                resetChromeAutoHideTimer();
                 return true;
             }
             return false;
+        });
+        pageNumberInput.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                cancelChromeAutoHideTimer();
+            } else {
+                resetChromeAutoHideTimer();
+            }
         });
         htmlFooterRow.addView(pageNumberInput, new LinearLayout.LayoutParams(dp(46), dp(32)));
 
@@ -1492,12 +1541,14 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
                 userDraggingScrubber = true;
+                cancelChromeAutoHideTimer();
             }
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
                 userDraggingScrubber = false;
                 navigateToPage(seekBar.getProgress(), false);
+                resetChromeAutoHideTimer();
             }
         });
         LinearLayout.LayoutParams seekLp = new LinearLayout.LayoutParams(
@@ -1517,6 +1568,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         btnScrollMode = createBottomChipButton("⇅ Vertical", v -> toggleScrollMode());
         btnNotesChip = createBottomChipButton("☰ Notes", v -> openDrawer(DrawerPanel.NOTES_BOOKMARKS));
         btnPrintChip = createBottomChipButton("⎙ Print", v -> triggerNativePrint());
+        btnPrintChip.setVisibility(View.GONE);
 
         quickRow.addView(btnRotate);
         quickRow.addView(btnTheme);
@@ -1540,7 +1592,9 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         bar.addView(createBottomChipButton("Highlight", v -> commitTextSelectionMarkup(TextMarkupStyle.HIGHLIGHT, COLOR_HIGHLIGHT_YELLOW, false)));
         bar.addView(createBottomChipButton("Underline", v -> commitTextSelectionMarkup(TextMarkupStyle.UNDERLINE, Color.rgb(37, 99, 235), false)));
         bar.addView(createBottomChipButton("+ Note", v -> commitTextSelectionMarkup(TextMarkupStyle.HIGHLIGHT, COLOR_HIGHLIGHT_GREEN, true)));
-        bar.addView(createBottomChipButton("Copy", v -> copyActiveSelectionToClipboard()));
+        btnSelectionCopy = createBottomChipButton("Copy", v -> copyActiveSelectionToClipboard());
+        btnSelectionCopy.setVisibility(View.GONE);
+        bar.addView(btnSelectionCopy);
         return bar;
     }
 
@@ -1594,6 +1648,8 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
         bottomBarContainer.setBackgroundColor(palette.bgCard);
         bottomFooterDivider.setBackgroundColor(palette.border);
+        previewBannerContainer.setBackgroundColor(palette.bgSecondary);
+        previewBannerLabel.setTextColor(palette.textSecondary);
         inkToolbarContainer.setBackgroundColor(palette.bgSecondary);
 
         btnPrevPage.setTextColor(palette.textPrimary);
@@ -1626,9 +1682,17 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
     private void setChromeVisible(boolean show, boolean animate) {
         if (this.chromeVisible == show && animate) {
+            if (show) {
+                resetChromeAutoHideTimer();
+            }
             return;
         }
         this.chromeVisible = show;
+        if (show) {
+            resetChromeAutoHideTimer();
+        } else {
+            cancelChromeAutoHideTimer();
+        }
         closeOverflowMenu();
 
         if (!show && selectionActionPopup.getVisibility() == View.VISIBLE) {
@@ -1735,6 +1799,30 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         }
     }
 
+    private boolean shouldPauseChromeAutoHide() {
+        return searchBarOpen
+                || inkBarOpen
+                || overflowMenuOpen
+                || drawerOpen
+                || userDraggingScrubber
+                || activeSelectionResult != null
+                || (loadingContainer != null && loadingContainer.getVisibility() == View.VISIBLE)
+                || (previewBlockedOverlay != null && previewBlockedOverlay.getVisibility() == View.VISIBLE)
+                || (pageNumberInput != null && pageNumberInput.hasFocus())
+                || (searchInput != null && searchInput.hasFocus());
+    }
+
+    private void resetChromeAutoHideTimer() {
+        mainHandler.removeCallbacks(chromeAutoHideRunnable);
+        if (chromeVisible && !shouldPauseChromeAutoHide()) {
+            mainHandler.postDelayed(chromeAutoHideRunnable, CHROME_INACTIVITY_TIMEOUT_MS);
+        }
+    }
+
+    private void cancelChromeAutoHideTimer() {
+        mainHandler.removeCallbacks(chromeAutoHideRunnable);
+    }
+
     // ── Document Resolution & Opening Pipeline ───────────────────────────────
 
     private void resolveAndOpenDocument(@NonNull Intent intent, @Nullable String passwordAttempt) {
@@ -1746,9 +1834,17 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         final String absolutePath = intent.getStringExtra(EXTRA_ABSOLUTE_PATH);
         final String titleHint = intent.getStringExtra(EXTRA_TITLE);
         final String mimeHint = intent.getStringExtra(EXTRA_MIME_TYPE);
-        final Uri dataUri = intent.getData();
+        final Uri dataUri = extractIncomingUri(intent);
         final boolean reqPreview = intent.getBooleanExtra(EXTRA_PREVIEW_MODE, false);
         final int requestedInitialPage = intent.getIntExtra(EXTRA_INITIAL_PAGE, -1);
+        final boolean isExternalActionView = Intent.ACTION_VIEW.equals(intent.getAction())
+                && dataUri != null
+                && TextUtils.isEmpty(resourceId)
+                && TextUtils.isEmpty(relativePath)
+                && TextUtils.isEmpty(absolutePath);
+
+        this.isExternalDocument = false;
+        applyExternalDocumentRestrictions();
 
         openExecutor.submit(() -> {
             try {
@@ -1777,15 +1873,18 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
                 MedvixDocumentStore store = new MedvixDocumentStore(this, doc);
 
+                final boolean externalDoc = isExternalActionView && doc.isExternal;
                 if (doc.isPdf()) {
                     PdfDocumentEngine engine = PdfDocumentEngine.open(
                             this, doc, pool, passwordAttempt, reqPreview, null);
                     final ResolvedDocument finalDoc = doc;
-                    mainHandler.post(() -> onPdfOpenedSuccess(finalDoc, engine, store, reqPreview, requestedInitialPage));
+                    mainHandler.post(() -> onPdfOpenedSuccess(
+                            finalDoc, engine, store, reqPreview, requestedInitialPage, externalDoc));
                 } else if (doc.isImage()) {
                     ImageDocumentEngine imgEngine = ImageDocumentEngine.open(this, doc, pool, null);
                     final ResolvedDocument finalDoc = doc;
-                    mainHandler.post(() -> onImageOpenedSuccess(finalDoc, imgEngine, store));
+                    mainHandler.post(() -> onImageOpenedSuccess(
+                            finalDoc, imgEngine, store, externalDoc));
                 } else {
                     store.close();
                     throw new IOException("Unsupported document format: " + doc.mimeType);
@@ -1804,11 +1903,25 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         });
     }
 
+    @Nullable
+    private static Uri extractIncomingUri(@NonNull Intent intent) {
+        Uri direct = intent.getData();
+        if (direct != null) {
+            return direct;
+        }
+        ClipData clipData = intent.getClipData();
+        if (clipData != null && clipData.getItemCount() > 0) {
+            return clipData.getItemAt(0).getUri();
+        }
+        return null;
+    }
+
     private void onPdfOpenedSuccess(@NonNull ResolvedDocument doc,
                                     @NonNull PdfDocumentEngine engine,
                                     @NonNull MedvixDocumentStore store,
                                     boolean reqPreview,
-                                    int requestedInitialPage) {
+                                    int requestedInitialPage,
+                                    boolean externalDoc) {
         if (isFinishing() || isDestroyed()) {
             engine.close();
             store.close();
@@ -1819,6 +1932,8 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         this.pdfEngine = engine;
         this.documentStore = store;
         this.previewMode = reqPreview;
+        this.isExternalDocument = externalDoc;
+        applyExternalDocumentRestrictions();
 
         registerSdCardProtectionIfNeeded(doc);
         setupStoreChangeListener(store);
@@ -1892,14 +2007,14 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             pdfPageAdapter.onFocusedPageChanged(startPage);
         }
 
-        engine.premeasureAllPagesAsync(null);
-        engine.ensureThumbnailCachedAsync(this, 360, null);
         loadingContainer.setVisibility(View.GONE);
+        resetChromeAutoHideTimer();
     }
 
     private void onImageOpenedSuccess(@NonNull ResolvedDocument doc,
                                       @NonNull ImageDocumentEngine imgEngine,
-                                      @NonNull MedvixDocumentStore store) {
+                                      @NonNull MedvixDocumentStore store,
+                                      boolean externalDoc) {
         if (isFinishing() || isDestroyed()) {
             imgEngine.close();
             store.close();
@@ -1910,7 +2025,9 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         this.imageEngine = imgEngine;
         this.documentStore = store;
         this.previewMode = false;
+        this.isExternalDocument = externalDoc;
         this.currentPageIndex = 0;
+        applyExternalDocumentRestrictions();
 
         registerSdCardProtectionIfNeeded(doc);
         setupStoreChangeListener(store);
@@ -1948,6 +2065,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
         imgEngine.ensureThumbnailCachedAsync(360, null);
         loadingContainer.setVisibility(View.GONE);
+        resetChromeAutoHideTimer();
     }
 
     private void setupStoreChangeListener(@NonNull MedvixDocumentStore store) {
@@ -2089,14 +2207,8 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
 
         if (standaloneImageCanvas.getVisibility() == View.VISIBLE) {
             standaloneImageCanvas.restoreViewportNormalized(clamped, normX, normY);
-        } else if (pdfRecyclerView.getVisibility() == View.VISIBLE) {
-            View child = pdfLayoutManager.findViewByPosition(currentPageIndex);
-            if (child instanceof DocumentCanvasView) {
-                ((DocumentCanvasView) child).restoreViewportNormalized(clamped, normX, normY);
-            } else if (pdfPageAdapter != null) {
-                pdfPageAdapter.scheduleInitialViewportRestore(currentPageIndex, clamped, normX, normY);
-                pdfPageAdapter.notifyItemChanged(currentPageIndex);
-            }
+        } else if (pdfRecyclerView.getVisibility() == View.VISIBLE && pdfPageAdapter != null) {
+            pdfPageAdapter.setSharedZoomScale(clamped);
         }
     }
 
@@ -2184,11 +2296,13 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         this.searchBarOpen = open;
         if (open) {
             if (!chromeVisible) setChromeVisible(true, true);
+            cancelChromeAutoHideTimer();
             searchBarContainer.setVisibility(View.VISIBLE);
             searchInput.requestFocus();
             showKeyboard(searchInput);
         } else {
             hideKeyboard(searchInput);
+            searchInput.clearFocus();
             searchBarContainer.setVisibility(View.GONE);
             if (activeSearchTask != null) {
                 activeSearchTask.cancel();
@@ -2203,6 +2317,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             if (drawerOpen && activeDrawerPanel == DrawerPanel.SEARCH_RESULTS) {
                 renderDrawerPanelContent(DrawerPanel.SEARCH_RESULTS);
             }
+            resetChromeAutoHideTimer();
         }
     }
 
@@ -2294,11 +2409,13 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         this.inkBarOpen = open;
         if (open) {
             if (!chromeVisible) setChromeVisible(true, true);
+            cancelChromeAutoHideTimer();
             inkToolbarContainer.setVisibility(View.VISIBLE);
             setActiveInteractionMode(InteractionMode.INK_PEN);
         } else {
             inkToolbarContainer.setVisibility(View.GONE);
             setActiveInteractionMode(InteractionMode.READ);
+            resetChromeAutoHideTimer();
         }
     }
 
@@ -2394,7 +2511,36 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
                 .show();
     }
 
+    private void applyExternalDocumentRestrictions() {
+        int externalVisibility = isExternalDocument ? View.VISIBLE : View.GONE;
+
+        if (btnPrintChip != null) {
+            btnPrintChip.setVisibility(externalVisibility);
+            btnPrintChip.setEnabled(isExternalDocument);
+        }
+        if (menuItemPrint != null) {
+            menuItemPrint.setVisibility(externalVisibility);
+            menuItemPrint.setEnabled(isExternalDocument);
+        }
+        if (menuItemOpenFile != null) {
+            menuItemOpenFile.setVisibility(externalVisibility);
+            menuItemOpenFile.setEnabled(isExternalDocument);
+        }
+        if (btnSelectionCopy != null) {
+            btnSelectionCopy.setVisibility(externalVisibility);
+            btnSelectionCopy.setEnabled(isExternalDocument);
+        }
+        if (menuItemShare != null) {
+            boolean hasShareableSource = resolvedDoc != null
+                    && (resolvedDoc.hasBackingFile() || resolvedDoc.getSourceUri() != null);
+            boolean canShare = isExternalDocument && hasShareableSource && !previewMode;
+            menuItemShare.setVisibility(canShare ? View.VISIBLE : View.GONE);
+            menuItemShare.setEnabled(canShare);
+        }
+    }
+
     private void copyActiveSelectionToClipboard() {
+        if (!isExternalDocument) return;
         TextSelectionResult sel = this.activeSelectionResult;
         if (sel == null || TextUtils.isEmpty(sel.selectedText)) return;
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -2473,23 +2619,32 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
                 .show();
     }
 
-    private void triggerNativePrint() {
+private void triggerNativePrint() {
+        if (!isExternalDocument) return;
         String title = resolvedDoc != null ? resolvedDoc.displayName : "MedVix Document";
         if (pdfEngine != null) {
-            MedvixDocumentPrintAdapter.printPdf(this, pdfEngine, documentStore, title, rotationDegrees, true);
+            MedvixDocumentPrintAdapter.printPdf(
+                    this, pdfEngine, documentStore, title, rotationDegrees, true, isExternalDocument);
         } else if (imageEngine != null) {
-            MedvixDocumentPrintAdapter.printImage(this, imageEngine, documentStore, title, rotationDegrees, true);
+            MedvixDocumentPrintAdapter.printImage(
+                    this, imageEngine, documentStore, title, rotationDegrees, true, isExternalDocument);
         }
     }
 
     private void shareBackingDocumentFile() {
-        if (resolvedDoc == null || !resolvedDoc.hasBackingFile() || previewMode) return;
-        File file = resolvedDoc.getBackingFile();
-        if (file == null) return;
+        if (!isExternalDocument || resolvedDoc == null || previewMode) return;
 
         try {
-            Uri shareUri = FileProvider.getUriForFile(
-                    this, getPackageName() + ".fileprovider", file);
+            Uri shareUri = null;
+            File file = resolvedDoc.getBackingFile();
+            if (file != null && file.exists()) {
+                shareUri = FileProvider.getUriForFile(
+                        this, getPackageName() + ".fileprovider", file);
+            } else if (resolvedDoc.getSourceUri() != null) {
+                shareUri = resolvedDoc.getSourceUri();
+            }
+            if (shareUri == null) return;
+
             Intent share = new Intent(Intent.ACTION_SEND);
             share.setType(resolvedDoc.mimeType);
             share.putExtra(Intent.EXTRA_STREAM, shareUri);
@@ -2567,6 +2722,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         if (this.activeSelectionCanvas == view) {
             this.activeSelectionCanvas = null;
             this.activeSelectionResult = null;
+            resetChromeAutoHideTimer();
         }
         selectionActionPopup.animate()
                 .alpha(0f)
@@ -2605,7 +2761,13 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
                                            float normalizedScrollX,
                                            float normalizedScrollY) {
         this.currentZoomScale = zoomFactor;
+        this.fitMode = (zoomFactor > 1.01f) ? FitMode.CUSTOM_ZOOM : FitMode.FIT_WIDTH;
         updateZoomLabel(zoomFactor);
+
+        if (pdfPageAdapter != null && pdfRecyclerView.getVisibility() == View.VISIBLE) {
+            pdfPageAdapter.setViewportState(zoomFactor, normalizedScrollX, normalizedScrollY, view);
+        }
+
         if (documentStore != null) {
             documentStore.updateViewportPosition(
                     pageIndex, zoomFactor, normalizedScrollX, normalizedScrollY, fitMode);

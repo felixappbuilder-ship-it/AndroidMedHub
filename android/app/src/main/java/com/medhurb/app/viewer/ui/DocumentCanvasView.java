@@ -566,9 +566,14 @@ public class DocumentCanvasView extends View {
     }
 
     public void restoreViewportNormalized(float zoomFactor, float normScrollX, float normScrollY) {
-        this.zoomFactor = clamp(zoomFactor, MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
+        float clampedZoom = clamp(zoomFactor, MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR);
+        boolean zoomChanged = Math.abs(this.zoomFactor - clampedZoom) > 0.0005f;
+        this.zoomFactor = clampedZoom;
         this.pendingRestoreNormX = normScrollX;
         this.pendingRestoreNormY = normScrollY;
+        if (zoomChanged && !standaloneFitPageMode) {
+            requestLayout();
+        }
         applyPendingNormalizedScrollIfReady();
         scheduleCrispTileUpdate();
         invalidate();
@@ -603,6 +608,10 @@ public class DocumentCanvasView extends View {
         zoomAnimator.addUpdateListener(anim -> {
             float z = (Float) anim.getAnimatedValue();
             applyZoomAroundFocalPoint(z, focusX, focusY);
+            if (!standaloneFitPageMode) {
+                requestLayout();
+            }
+            notifyViewportChanged();
             invalidate();
         });
         zoomAnimator.start();
@@ -658,9 +667,10 @@ public class DocumentCanvasView extends View {
                 fitScale = (float) measuredW / rotW;
             }
         } else {
-            // Vertical RecyclerView continuous page item: wrap tightly to page aspect ratio
+            // Vertical RecyclerView continuous page item: scale height uniformly with zoomFactor
+            // so pages never overlap or leave gaps and vertical scrolling stays in the RecyclerView.
             fitScale = (float) measuredW / rotW;
-            measuredH = Math.max(1, Math.round(rotH * fitScale));
+            measuredH = Math.max(1, Math.round(rotH * fitScale * zoomFactor));
             if (heightMode == MeasureSpec.AT_MOST && heightSize > 0) {
                 measuredH = Math.min(measuredH, heightSize);
             }
@@ -1329,10 +1339,19 @@ public class DocumentCanvasView extends View {
         boolean scaleHandled = scaleDetector.onTouchEvent(event);
         boolean gestureHandled = gestureDetector.onTouchEvent(event);
 
-        // Cooperate with parent RecyclerView when zoomed vs unzoomed
+        // Cooperate with parent RecyclerView:
+        // - During multi-touch pinch, lock parent interception.
+        // - In continuous vertical scroll mode, let RecyclerView intercept vertical drags
+        //   while DocumentCanvasView handles horizontal panning across the zoomed page.
         ViewParent parent = getParent();
         if (parent != null) {
-            if (zoomFactor > 1.02f || scaleDetector.isInProgress()) {
+            if (scaleDetector.isInProgress()) {
+                parent.requestDisallowInterceptTouchEvent(true);
+            } else if (!standaloneFitPageMode) {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    parent.requestDisallowInterceptTouchEvent(false);
+                }
+            } else if (zoomFactor > 1.02f) {
                 parent.requestDisallowInterceptTouchEvent(true);
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 parent.requestDisallowInterceptTouchEvent(false);
@@ -1558,6 +1577,9 @@ public class DocumentCanvasView extends View {
             panOffsetX = scroller.getCurrX();
             panOffsetY = scroller.getCurrY();
             clampPanOffsets();
+            if (!standaloneFitPageMode) {
+                notifyViewportChanged();
+            }
             postInvalidateOnAnimation();
         } else if (isScalingOrFlinging) {
             isScalingOrFlinging = false;
@@ -1581,6 +1603,10 @@ public class DocumentCanvasView extends View {
         public boolean onScale(@NonNull ScaleGestureDetector detector) {
             float nextZoom = zoomFactor * detector.getScaleFactor();
             applyZoomAroundFocalPoint(nextZoom, detector.getFocusX(), detector.getFocusY());
+            if (!standaloneFitPageMode) {
+                requestLayout();
+            }
+            notifyViewportChanged();
             invalidate();
             return true;
         }
@@ -1682,6 +1708,24 @@ public class DocumentCanvasView extends View {
                     parent.requestDisallowInterceptTouchEvent(false);
                 }
                 return false;
+            }
+
+            if (!standaloneFitPageMode) {
+                // Continuous vertical scroll mode: vertical scrolling stays in RecyclerView,
+                // while horizontal panning updates synchronously across all pages.
+                boolean mostlyVertical = Math.abs(distanceY) > Math.abs(distanceX);
+                ViewParent parent = getParent();
+                if (parent != null) {
+                    parent.requestDisallowInterceptTouchEvent(!mostlyVertical);
+                }
+                if (mostlyVertical) {
+                    return false;
+                }
+                panOffsetX -= distanceX;
+                clampPanOffsets();
+                notifyViewportChanged();
+                invalidate();
+                return true;
             }
 
             float prevX = panOffsetX;

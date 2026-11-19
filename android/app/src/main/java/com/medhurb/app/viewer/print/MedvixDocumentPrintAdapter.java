@@ -84,7 +84,11 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                                     @Nullable MedvixDocumentStore store,
                                     @Nullable String jobName,
                                     int rotationDegrees,
-                                    boolean includeAnnotations) {
+                                    boolean includeAnnotations,
+                                    boolean isExternalDocument) {
+        if (!isExternalDocument || !pdfEngine.getResolvedDocument().isExternal) {
+            return null;
+        }
         PrintManager pm = (PrintManager) context.getSystemService(Context.PRINT_SERVICE);
         if (pm == null) return null;
 
@@ -107,7 +111,8 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                 store,
                 title,
                 rot,
-                includeAnnotations
+                includeAnnotations,
+                true
         );
         return pm.print(title, adapter, attrs);
     }
@@ -121,7 +126,11 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                                       @Nullable MedvixDocumentStore store,
                                       @Nullable String jobName,
                                       int rotationDegrees,
-                                      boolean includeAnnotations) {
+                                      boolean includeAnnotations,
+                                      boolean isExternalDocument) {
+        if (!isExternalDocument || !imageEngine.getResolvedDocument().isExternal) {
+            return null;
+        }
         PrintManager pm = (PrintManager) context.getSystemService(Context.PRINT_SERVICE);
         if (pm == null) return null;
 
@@ -144,7 +153,8 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                 store,
                 title,
                 rot,
-                includeAnnotations
+                includeAnnotations,
+                true
         );
         return pm.print(title, adapter, attrs);
     }
@@ -158,6 +168,7 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
     @NonNull private final String documentTitle;
     private final int rotationDegrees;
     private final boolean includeAnnotations;
+    private final boolean isExternalDocument;
 
     private final ExecutorService printExecutor;
     @Nullable private volatile Future<?> activeWriteFuture;
@@ -175,7 +186,8 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                                       @Nullable MedvixDocumentStore documentStore,
                                       @NonNull String documentTitle,
                                       int rotationDegrees,
-                                      boolean includeAnnotations) {
+                                      boolean includeAnnotations,
+                                      boolean isExternalDocument) {
         if (pdfEngine == null && imageEngine == null) {
             throw new IllegalArgumentException("Either pdfEngine or imageEngine must be non-null");
         }
@@ -186,6 +198,9 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
         this.documentTitle = sanitizeJobName(documentTitle, "MedVix Document");
         this.rotationDegrees = PdfDocumentEngine.normalizeRotation(rotationDegrees);
         this.includeAnnotations = includeAnnotations;
+        boolean docExternal = (pdfEngine != null && pdfEngine.getResolvedDocument().isExternal)
+                || (imageEngine != null && imageEngine.getResolvedDocument().isExternal);
+        this.isExternalDocument = isExternalDocument && docExternal;
 
         this.printExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "MedvixPrint-Worker");
@@ -207,7 +222,7 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                          @NonNull CancellationSignal cancellationSignal,
                          @NonNull LayoutResultCallback callback,
                          @Nullable Bundle extras) {
-        if (cancellationSignal.isCanceled()) {
+        if (cancellationSignal.isCanceled() || !isExternalDocument) {
             callback.onLayoutCancelled();
             return;
         }
@@ -241,7 +256,7 @@ public final class MedvixDocumentPrintAdapter extends PrintDocumentAdapter {
                         @NonNull ParcelFileDescriptor destination,
                         @NonNull CancellationSignal cancellationSignal,
                         @NonNull WriteResultCallback callback) {
-        if (cancellationSignal.isCanceled()) {
+        if (cancellationSignal.isCanceled() || !isExternalDocument) {
             safeClosePfd(destination);
             callback.onWriteCancelled();
             return;

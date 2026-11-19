@@ -48,6 +48,7 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
     private static final String PAYLOAD_SEARCH          = "payload_search";
     private static final String PAYLOAD_INTERACTION     = "payload_interaction";
     private static final String PAYLOAD_ANNOTATIONS     = "payload_annotations";
+    private static final String PAYLOAD_VIEWPORT        = "payload_viewport";
 
     // ── Prefetch Tuning ──────────────────────────────────────────────────────
 
@@ -79,15 +80,22 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
     private int activeSearchPageIndex = -1;
     private int activeSearchMatchIndexOnPage = -1;
 
+    // ── Shared Document-Wide Viewport Transform (Applied to All Pages) ───────
+
+    private float sharedZoomScale = 1.0f;
+    private float sharedNormalizedScrollX = 0.5f;
+    private float sharedNormalizedScrollY = 0.0f;
+
     // ── One-Shot Initial Viewport Restoration ────────────────────────────────
 
     private int pendingRestorePageIndex = -1;
     private float pendingRestoreZoom = 1.0f;
-    private float pendingRestoreNormX = 0f;
+    private float pendingRestoreNormX = 0.5f;
     private float pendingRestoreNormY = 0f;
 
     // ── Adjacent-Page Prefetch Tracking ──────────────────────────────────────
 
+    @Nullable private RecyclerView attachedRecyclerView;
     private int lastFocusedPageIndex = -1;
     private final SparseArray<TaskHandle> activePrefetchTasks = new SparseArray<>();
 
@@ -126,19 +134,123 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
 
     /**
      * Queues a one-time zoom & pan restoration that will be applied automatically
-     * when targetPageIndex next binds.
+     * when targetPageIndex next binds, and seeds the shared document-wide zoom/pan.
      */
     public void scheduleInitialViewportRestore(int targetPageIndex,
                                                float zoomScale,
                                                float normalizedScrollX,
                                                float normalizedScrollY) {
+        float clampedZoom = clampZoom(zoomScale);
+        this.sharedZoomScale = clampedZoom;
+        this.sharedNormalizedScrollX = clampNormalized(normalizedScrollX);
+        this.sharedNormalizedScrollY = clampNormalized(normalizedScrollY);
+
         this.pendingRestorePageIndex = targetPageIndex;
-        this.pendingRestoreZoom = zoomScale;
-        this.pendingRestoreNormX = normalizedScrollX;
-        this.pendingRestoreNormY = normalizedScrollY;
+        this.pendingRestoreZoom = clampedZoom;
+        this.pendingRestoreNormX = this.sharedNormalizedScrollX;
+        this.pendingRestoreNormY = this.sharedNormalizedScrollY;
+    }
+
+    /**
+     * Updates the shared zoom scale and horizontal pan offset for the entire
+     * document unit and immediately pushes the transform to all bound pages.
+     */
+    public void setViewportState(float zoomScale,
+                                 float normalizedScrollX,
+                                 float normalizedScrollY) {
+        setViewportState(zoomScale, normalizedScrollX, normalizedScrollY, null);
+    }
+
+    public void setViewportState(float zoomScale,
+                                 float normalizedScrollX,
+                                 float normalizedScrollY,
+                                 @Nullable DocumentCanvasView sourceView) {
+        float clampedZoom = clampZoom(zoomScale);
+        float clampedX = clampNormalized(normalizedScrollX);
+        float clampedY = clampNormalized(normalizedScrollY);
+
+        boolean zoomChanged = Math.abs(this.sharedZoomScale - clampedZoom) > 0.0005f;
+        boolean panXChanged = Math.abs(this.sharedNormalizedScrollX - clampedX) > 0.0005f;
+        this.sharedZoomScale = clampedZoom;
+        this.sharedNormalizedScrollX = clampedX;
+        this.sharedNormalizedScrollY = clampedY;
+        this.fitMode = (clampedZoom > 1.01f) ? FitMode.CUSTOM_ZOOM : FitMode.FIT_WIDTH;
+
+        if (!zoomChanged && !panXChanged) {
+            return;
+        }
+
+        // 1. Update every other attached page synchronously in the same frame
+        RecyclerView rv = this.attachedRecyclerView;
+        if (rv != null) {
+            int childCount = rv.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                if (rv.getChildAt(i) instanceof DocumentCanvasView) {
+                    DocumentCanvasView pageView = (DocumentCanvasView) rv.getChildAt(i);
+                    if (pageView != sourceView) {
+                        applySharedViewportToView(pageView, zoomChanged);
+                    }
+                }
+            }
+        }
+
+        // 2. Sync any non-visible / scrap views when not actively pinching
+        int count = getItemCount();
+        if (sourceView == null && count > 0 && (rv == null || !rv.isComputingLayout())) {
+            notifyItemRangeChanged(0, count, PAYLOAD_VIEWPORT);
+        }
+    }
+
+    /**
+     * Convenience helper for footer [-] / [+] / Reset / Fit-Width buttons.
+     */
+    public void setSharedZoomScale(float zoomScale) {
+        setViewportState(zoomScale, this.sharedNormalizedScrollX, this.sharedNormalizedScrollY);
+    }
+
+    public float getSharedZoomScale() {
+        return sharedZoomScale;
+    }
+
+    public float getSharedNormalizedScrollX() {
+        return sharedNormalizedScrollX;
+    }
+
+    private void applySharedViewportToView(@NonNull DocumentCanvasView view, boolean relayoutItem) {
+        float targetY = (scrollMode == ScrollMode.VERTICAL_CONTINUOUS)
+                ? 0.5f
+                : sharedNormalizedScrollY;
+        view.restoreViewportNormalized(sharedZoomScale, sharedNormalizedScrollX, targetY);
+        if (relayoutItem && scrollMode == ScrollMode.VERTICAL_CONTINUOUS) {
+            view.requestLayout();
+        }
+    }
+
+    private static float clampZoom(float z) {
+        if (Float.isNaN(z) || Float.isInfinite(z)) return 1.0f;
+        return Math.max(1.0f, Math.min(5.0f, z));
+    }
+
+    private static float clampNormalized(float v) {
+        if (Float.isNaN(v) || Float.isInfinite(v)) return 0.5f;
+        return Math.max(0.0f, Math.min(1.0f, v));
     }
 
     // ── RecyclerView.Adapter Overrides ───────────────────────────────────────
+
+    @Override
+    public void onAttachedToRecyclerView(@NonNull RecyclerView recyclerView) {
+        super.onAttachedToRecyclerView(recyclerView);
+        this.attachedRecyclerView = recyclerView;
+    }
+
+    @Override
+    public void onDetachedFromRecyclerView(@NonNull RecyclerView recyclerView) {
+        if (this.attachedRecyclerView == recyclerView) {
+            this.attachedRecyclerView = null;
+        }
+        super.onDetachedFromRecyclerView(recyclerView);
+    }
 
     @Override
     public int getItemCount() {
@@ -189,9 +301,14 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
             float restoreX = pendingRestoreNormX;
             float restoreY = pendingRestoreNormY;
             pendingRestorePageIndex = -1;
-            if (restoreZ > 1.01f || restoreX > 0.001f || restoreY > 0.001f) {
-                view.restoreViewportNormalized(restoreZ, restoreX, restoreY);
+            this.sharedZoomScale = clampZoom(restoreZ);
+            this.sharedNormalizedScrollX = clampNormalized(restoreX);
+            this.sharedNormalizedScrollY = clampNormalized(restoreY);
+            if (sharedZoomScale > 1.01f || restoreX > 0.001f || restoreY > 0.001f) {
+                view.restoreViewportNormalized(sharedZoomScale, sharedNormalizedScrollX, restoreY);
             }
+        } else if (sharedZoomScale > 1.001f || Math.abs(sharedNormalizedScrollX - 0.5f) > 0.001f) {
+            applySharedViewportToView(view, true);
         }
     }
 
@@ -215,6 +332,8 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
                 view.setInkBrush(activeInkColor, activeInkWidthPt);
             } else if (PAYLOAD_ANNOTATIONS.equals(payload)) {
                 view.invalidate();
+            } else if (PAYLOAD_VIEWPORT.equals(payload)) {
+                applySharedViewportToView(view, true);
             }
         }
     }
@@ -391,6 +510,17 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
         if (focusedPageIndex < 0 || focusedPageIndex >= getItemCount()) return;
         if (this.lastFocusedPageIndex == focusedPageIndex) return;
         this.lastFocusedPageIndex = focusedPageIndex;
+
+        RecyclerView rv = this.attachedRecyclerView;
+        if (rv != null && (sharedZoomScale > 1.001f || Math.abs(sharedNormalizedScrollX - 0.5f) > 0.001f)) {
+            int childCount = rv.getChildCount();
+            for (int i = 0; i < childCount; i++) {
+                if (rv.getChildAt(i) instanceof DocumentCanvasView) {
+                    applySharedViewportToView((DocumentCanvasView) rv.getChildAt(i), false);
+                }
+            }
+        }
+
         scheduleAdjacentPrefetch(focusedPageIndex);
     }
 
@@ -428,7 +558,7 @@ public final class PdfPageAdapter extends RecyclerView.Adapter<PdfPageAdapter.Pa
         float rotW = Math.max(1f, est.getRotatedWidthPt(rotationDegrees));
         float rotH = Math.max(1f, est.getRotatedHeightPt(rotationDegrees));
 
-        float fitScale = (float) viewportWidthPx / rotW;
+        float fitScale = ((float) viewportWidthPx / rotW) * sharedZoomScale;
         float targetScale = Math.max(fitScale, 1.25f);
         float maxSide = Math.max(rotW, rotH);
         if (maxSide * targetScale > MAX_PREFETCH_BITMAP_PX) {

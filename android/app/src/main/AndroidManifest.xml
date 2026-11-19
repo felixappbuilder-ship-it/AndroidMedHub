@@ -91,42 +91,36 @@
                 <data android:scheme="https" android:host="www.app.medvix.co.ke" />
             </intent-filter>
 
-            <!--
-                External-file "Open with" intent filters have been removed.
-                MedVix no longer appears in the OS chooser when the user taps
-                a PDF, image, or .txt file in Files, Gmail, Chrome, Drive, or
-                any other app.
+            </activity>
 
-                The FileOpenPlugin is still installed and MainActivity still
-                forwards any ACTION_VIEW intents it receives to it. But with
-                no matching intent-filter, the OS will never launch MedVix
-                this way. The plugin simply never receives a URI, and
-                viewer.js's `_wireNativeFileOpen` handshake stays idle.
+        <!-- ===== Native PDF & Image Viewer Activity ===== -->
+        <activity
+            android:name=".viewer.ui.MedvixPdfActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/AppTheme.NoActionBar">
 
-                To re-enable external file opening later, restore the three
-                intent-filter blocks below.
+            <!-- "Open With" handler for external PDF files -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
 
-                <intent-filter>
-                    <action android:name="android.intent.action.VIEW" />
-                    <category android:name="android.intent.category.DEFAULT" />
-                    <category android:name="android.intent.category.BROWSABLE" />
-                    <data android:mimeType="application/pdf" />
-                </intent-filter>
-
-                <intent-filter>
-                    <action android:name="android.intent.action.VIEW" />
-                    <category android:name="android.intent.category.DEFAULT" />
-                    <category android:name="android.intent.category.BROWSABLE" />
-                    <data android:mimeType="image/*" />
-                </intent-filter>
-
-                <intent-filter>
-                    <action android:name="android.intent.action.VIEW" />
-                    <category android:name="android.intent.category.DEFAULT" />
-                    <category android:name="android.intent.category.BROWSABLE" />
-                    <data android:mimeType="text/plain" />
-                </intent-filter>
-            -->
+            <!-- "Open With" handler for external Images -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
 
         <!-- ===== File provider for sharing/printing PDFs ===== -->

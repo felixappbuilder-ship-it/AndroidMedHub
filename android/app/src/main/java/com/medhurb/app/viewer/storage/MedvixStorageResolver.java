@@ -26,7 +26,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -50,6 +49,8 @@ import java.util.UUID;
  *     spooling non-seekable pipe streams from third-party content providers).
  *  5. Flags removable SD-card documents so viewers can attach ACTION_MEDIA_EJECT
  *     SIGBUS protection.
+ *  6. Distinguishes private MedVix library documents (isExternal = false) from
+ *     external ACTION_VIEW URIs/files (isExternal = true).
  */
 public final class MedvixStorageResolver {
 
@@ -154,6 +155,7 @@ public final class MedvixStorageResolver {
         @NonNull public final String mimeType;
         public final long byteLength;
         public final boolean isRemovableStorage;
+        public final boolean isExternal;
 
         @Nullable private final File backingFile;
         @Nullable private final Uri sourceUri;
@@ -167,6 +169,7 @@ public final class MedvixStorageResolver {
                                  @NonNull String mimeType,
                                  long byteLength,
                                  boolean isRemovableStorage,
+                                 boolean isExternal,
                                  @Nullable File backingFile,
                                  @Nullable Uri sourceUri,
                                  @Nullable File itemDirectory) {
@@ -178,6 +181,7 @@ public final class MedvixStorageResolver {
             this.mimeType = mimeType;
             this.byteLength = byteLength;
             this.isRemovableStorage = isRemovableStorage;
+            this.isExternal = isExternal;
             this.backingFile = backingFile;
             this.sourceUri = sourceUri;
             this.itemDirectory = itemDirectory;
@@ -189,6 +193,10 @@ public final class MedvixStorageResolver {
 
         public boolean isImage() {
             return kind == DocumentKind.RASTER_IMAGE || kind == DocumentKind.SVG_IMAGE;
+        }
+
+        public boolean isExternal() {
+            return isExternal;
         }
 
         public boolean hasBackingFile() {
@@ -509,6 +517,7 @@ public final class MedvixStorageResolver {
     /**
      * Resolves a downloaded MedVix library resource by its Convex resourceId across
      * all three storage roots ('internal', 'external', 'sdcard').
+     * Always marks the resulting document as internal (isExternal = false).
      */
     @Nullable
     public static ResolvedDocument resolveByResourceId(@NonNull Context context,
@@ -535,6 +544,7 @@ public final class MedvixStorageResolver {
                         titleHint,
                         mimeHint,
                         root.removable,
+                        false,
                         candidate.getParentFile()
                 );
             }
@@ -549,6 +559,7 @@ public final class MedvixStorageResolver {
                         titleHint,
                         mimeHint,
                         root.removable,
+                        false,
                         assetCandidate.getParentFile()
                 );
             }
@@ -560,6 +571,7 @@ public final class MedvixStorageResolver {
     /**
      * Resolves a document stored at a MedVix-relative path (e.g., "content/files/blobs/.../blob.bin")
      * across all three storage roots.
+     * Always marks the resulting document as internal (isExternal = false).
      */
     @Nullable
     public static ResolvedDocument resolveByRelativePath(@NonNull Context context,
@@ -585,6 +597,7 @@ public final class MedvixStorageResolver {
                         titleHint,
                         mimeHint,
                         root.removable,
+                        false,
                         candidate.getParentFile()
                 );
             }
@@ -595,6 +608,7 @@ public final class MedvixStorageResolver {
     /**
      * Resolves an Android Uri (content:// or file://) opened from an external intent,
      * file picker, or share sheet.
+     * Marks isExternal = true unless the URI resolves inside MedVix's own private storage/authority.
      */
     @Nullable
     public static ResolvedDocument resolveByUri(@NonNull Context context,
@@ -649,6 +663,7 @@ public final class MedvixStorageResolver {
             byte[] header = readHeaderBytes(pfd.getFileDescriptor());
             SniffResult sniff = classifyHeader(header, resolvedMime, displayName);
             String slugId = "ext-" + shortSha256(uri.toString());
+            boolean external = !isAppPrivateUri(appCtx, uri);
 
             return new ResolvedDocument(
                     sniff.kind,
@@ -659,6 +674,7 @@ public final class MedvixStorageResolver {
                     sniff.mimeType,
                     byteLength,
                     false,
+                    external,
                     null,
                     uri,
                     null
@@ -670,6 +686,7 @@ public final class MedvixStorageResolver {
 
     /**
      * Resolves a direct filesystem path (e.g., from file:// URI or native cache).
+     * Marks isExternal = true only when the canonical path lies outside MedVix's private storage.
      */
     @Nullable
     public static ResolvedDocument resolveByAbsolutePath(@NonNull Context context,
@@ -687,6 +704,7 @@ public final class MedvixStorageResolver {
                 removable = Environment.isExternalStorageRemovable(file);
             } catch (IllegalArgumentException ignored) {
             }
+            boolean external = !isAppPrivateFile(context, file);
             String slugId = "file-" + shortSha256(file.getAbsolutePath());
             return buildFromLocalFile(
                     file,
@@ -696,10 +714,54 @@ public final class MedvixStorageResolver {
                     titleHint,
                     mimeHint,
                     removable,
+                    external,
                     null
             );
         } catch (IOException e) {
             return null;
+        }
+    }
+
+    private static boolean isAppPrivateUri(@NonNull Context appCtx, @NonNull Uri uri) {
+        String authority = uri.getAuthority();
+        String pkg = appCtx.getPackageName();
+        return authority != null && !TextUtils.isEmpty(pkg)
+                && (authority.equals(pkg) || authority.startsWith(pkg + "."));
+    }
+
+    private static boolean isAppPrivateFile(@NonNull Context context, @NonNull File canonicalFile) {
+        Context appCtx = context.getApplicationContext();
+        if (isWithinDirectory(canonicalFile, appCtx.getFilesDir())) return true;
+        if (isWithinDirectory(canonicalFile, appCtx.getCacheDir())) return true;
+
+        File[] extFiles = appCtx.getExternalFilesDirs(null);
+        if (extFiles != null) {
+            for (File dir : extFiles) {
+                if (isWithinDirectory(canonicalFile, dir)) return true;
+            }
+        }
+        File[] extCaches = appCtx.getExternalCacheDirs();
+        if (extCaches != null) {
+            for (File dir : extCaches) {
+                if (isWithinDirectory(canonicalFile, dir)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isWithinDirectory(@NonNull File targetCanonical, @Nullable File rootDir) {
+        if (rootDir == null) return false;
+        try {
+            File canonicalRoot = rootDir.getCanonicalFile();
+            String rootPath = canonicalRoot.getPath();
+            String targetPath = targetCanonical.getPath();
+            if (targetPath.equals(rootPath)) {
+                return true;
+            }
+            String prefix = rootPath.endsWith(File.separator) ? rootPath : rootPath + File.separator;
+            return targetPath.startsWith(prefix);
+        } catch (IOException e) {
+            return true; // Fail closed if path resolution fails
         }
     }
 
@@ -713,6 +775,7 @@ public final class MedvixStorageResolver {
                                                        @Nullable String titleHint,
                                                        @Nullable String mimeHint,
                                                        boolean removable,
+                                                       boolean isExternal,
                                                        @Nullable File itemDir) {
         byte[] header = readHeaderBytes(file);
         String displayName = !TextUtils.isEmpty(titleHint) ? titleHint : file.getName();
@@ -727,6 +790,7 @@ public final class MedvixStorageResolver {
                 sniff.mimeType,
                 file.length(),
                 removable,
+                isExternal,
                 file,
                 null,
                 itemDir
