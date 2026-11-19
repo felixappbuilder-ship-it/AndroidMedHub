@@ -193,6 +193,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     }
 
     private enum DrawerPanel {
+        OUTLINE,
         NOTES_BOOKMARKS,
         SEARCH_RESULTS,
         DOCUMENT_INFO
@@ -260,7 +261,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     private boolean inkBarOpen = false;
     private boolean overflowMenuOpen = false;
     private boolean drawerOpen = false;
-    @NonNull private DrawerPanel activeDrawerPanel = DrawerPanel.NOTES_BOOKMARKS;
+    @NonNull private DrawerPanel activeDrawerPanel = DrawerPanel.OUTLINE;
 
     @NonNull private InteractionMode interactionMode = InteractionMode.READ;
     private int selectedInkColor = COLOR_INK_RED;
@@ -332,10 +333,14 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     // Left Slide-Over Drawer & Scrim (#viewer-outline-drawer + #viewer-drawer-scrim)
     private View drawerScrimView;
     private LinearLayout sideDrawerContainer;
+    private TextView tabDrawerOutline;
     private TextView tabDrawerNotes;
     private TextView tabDrawerSearch;
     private TextView tabDrawerInfo;
     private LinearLayout drawerBodyContainer;
+
+    @Nullable private PdfDocumentEngine.TaskHandle activeOutlineTask;
+    private final List<PdfDocumentEngine.OutlineItem> documentOutlineItems = new ArrayList<>();
 
     // Locked Preview Overlay Card (.viewer-preview-blocked)
     private FrameLayout previewBlockedOverlay;
@@ -808,7 +813,11 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         menu.setBackground(createBorderedRoundedDrawable(palette.bgCard, palette.border, dp(1), dp(10)));
         menu.setElevation(dp(12));
 
-        menu.addView(createDropdownMenuItem("☰", "Sidebar & Notes", v -> {
+        menu.addView(createDropdownMenuItem("📑", "Book outline", v -> {
+            closeOverflowMenu();
+            openDrawer(DrawerPanel.OUTLINE);
+        }));
+        menu.addView(createDropdownMenuItem("☰", "Notes & Bookmarks", v -> {
             closeOverflowMenu();
             openDrawer(DrawerPanel.NOTES_BOOKMARKS);
         }));
@@ -1007,15 +1016,15 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         searchCounterText.setPadding(dp(6), 0, dp(4), 0);
         row.addView(searchCounterText);
 
-        // HTML Search Options: Aa (Match case) and “” (Whole word)
-        btnMatchCase = createSmallTogglePill("Aa", "Match case", false, v -> {
+        // Case Sensitive toggle pill ("AA,aa") + Whole Word toggle pill ("Word")
+        btnMatchCase = createSmallTogglePill("AA,aa", "Case sensitive", false, v -> {
             searchMatchCase = !searchMatchCase;
             styleTogglePill(btnMatchCase, searchMatchCase);
             if (!TextUtils.isEmpty(searchInput.getText())) {
                 executeDocumentSearch(searchInput.getText().toString());
             }
         });
-        btnWholeWord = createSmallTogglePill("“”", "Whole word", false, v -> {
+        btnWholeWord = createSmallTogglePill("Word", "Whole word", false, v -> {
             searchWholeWord = !searchWholeWord;
             styleTogglePill(btnWholeWord, searchWholeWord);
             if (!TextUtils.isEmpty(searchInput.getText())) {
@@ -1050,15 +1059,17 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
         drawer.setBackgroundColor(palette.bgCard);
         drawer.setElevation(dp(12));
 
-        // 3-panel tab strip (Bookmarks & Notes | Search Results | Document Info)
+        // 4-panel tab strip (Outline | Notes | Search | Info)
         LinearLayout tabRow = new LinearLayout(this);
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
-        tabRow.setPadding(dp(8), dp(8), dp(8), dp(8));
+        tabRow.setPadding(dp(6), dp(8), dp(6), dp(8));
 
-        tabDrawerNotes = createDrawerTabButton("Bookmarks & Notes", v -> switchDrawerPanel(DrawerPanel.NOTES_BOOKMARKS));
+        tabDrawerOutline = createDrawerTabButton("Outline", v -> switchDrawerPanel(DrawerPanel.OUTLINE));
+        tabDrawerNotes = createDrawerTabButton("Notes", v -> switchDrawerPanel(DrawerPanel.NOTES_BOOKMARKS));
         tabDrawerSearch = createDrawerTabButton("Search", v -> switchDrawerPanel(DrawerPanel.SEARCH_RESULTS));
         tabDrawerInfo = createDrawerTabButton("Info", v -> switchDrawerPanel(DrawerPanel.DOCUMENT_INFO));
 
+        tabRow.addView(tabDrawerOutline, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         tabRow.addView(tabDrawerNotes, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         tabRow.addView(tabDrawerSearch, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         tabRow.addView(tabDrawerInfo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -1148,18 +1159,87 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     }
 
     private void renderDrawerPanelContent(@NonNull DrawerPanel panel) {
+        styleDrawerTab(tabDrawerOutline, panel == DrawerPanel.OUTLINE);
         styleDrawerTab(tabDrawerNotes, panel == DrawerPanel.NOTES_BOOKMARKS);
         styleDrawerTab(tabDrawerSearch, panel == DrawerPanel.SEARCH_RESULTS);
         styleDrawerTab(tabDrawerInfo, panel == DrawerPanel.DOCUMENT_INFO);
 
         drawerBodyContainer.removeAllViews();
 
-        if (panel == DrawerPanel.NOTES_BOOKMARKS) {
+        if (panel == DrawerPanel.OUTLINE) {
+            renderOutlineInDrawer();
+        } else if (panel == DrawerPanel.NOTES_BOOKMARKS) {
             renderBookmarksAndNotesInDrawer();
         } else if (panel == DrawerPanel.SEARCH_RESULTS) {
             renderSearchResultsInDrawer();
         } else {
             renderDocumentInfoInDrawer();
+        }
+    }
+
+    private void renderOutlineInDrawer() {
+        if (documentOutlineItems.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("No table of contents found in this document.\nUse the page scrubber below or Search to jump to a topic.");
+            empty.setTextColor(palette.textMuted);
+            empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(8), dp(24), dp(8), dp(24));
+            drawerBodyContainer.addView(empty);
+            return;
+        }
+
+        drawerBodyContainer.addView(createDrawerSectionHeader("BOOK OUTLINE"));
+        appendOutlineNodesRecursive(documentOutlineItems);
+    }
+
+    private void appendOutlineNodesRecursive(@NonNull List<PdfDocumentEngine.OutlineItem> nodes) {
+        for (PdfDocumentEngine.OutlineItem node : nodes) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            int indentPx = dp(10 + Math.min(4, node.level) * 14);
+            row.setPadding(indentPx, dp(9), dp(10), dp(9));
+
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dp(4);
+            row.setLayoutParams(lp);
+
+            boolean isCurrentChapter = (node.pageIndex == currentPageIndex);
+            row.setBackground(createRoundedRectDrawable(
+                    isCurrentChapter ? palette.accent : palette.bgSecondary, dp(8)));
+
+            TextView titleTv = new TextView(this);
+            String prefix = node.level == 0 ? "▸ " : "• ";
+            titleTv.setText(prefix + node.title);
+            titleTv.setTextColor(isCurrentChapter ? Color.WHITE : palette.textPrimary);
+            titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, node.level == 0 ? 13f : 12.5f);
+            if (node.level == 0) {
+                titleTv.setTypeface(Typeface.DEFAULT_BOLD);
+            }
+            titleTv.setMaxLines(2);
+            titleTv.setEllipsize(TextUtils.TruncateAt.END);
+            row.addView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView pageBadge = new TextView(this);
+            pageBadge.setText("p. " + (node.pageIndex + 1));
+            pageBadge.setTextColor(isCurrentChapter ? Color.WHITE : palette.textMuted);
+            pageBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            pageBadge.setPadding(dp(8), 0, 0, 0);
+            row.addView(pageBadge);
+
+            final int targetPage = node.pageIndex;
+            row.setOnClickListener(v -> {
+                closeDrawer(true);
+                navigateToPage(targetPage, false);
+            });
+
+            drawerBodyContainer.addView(row);
+
+            if (!node.children.isEmpty()) {
+                appendOutlineNodesRecursive(node.children);
+            }
         }
     }
 
@@ -2007,6 +2087,26 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             pdfPageAdapter.onFocusedPageChanged(startPage);
         }
 
+        documentOutlineItems.clear();
+        if (activeOutlineTask != null) {
+            activeOutlineTask.cancel();
+        }
+        activeOutlineTask = engine.extractOutlineAsync(new PdfDocumentEngine.OutlineCallback() {
+            @Override
+            public void onOutlineLoaded(@NonNull List<PdfDocumentEngine.OutlineItem> items) {
+                documentOutlineItems.clear();
+                documentOutlineItems.addAll(items);
+                if (drawerOpen && activeDrawerPanel == DrawerPanel.OUTLINE) {
+                    renderDrawerPanelContent(DrawerPanel.OUTLINE);
+                }
+            }
+
+            @Override
+            public void onOutlineError(@NonNull Throwable error) {
+                documentOutlineItems.clear();
+            }
+        });
+
         loadingContainer.setVisibility(View.GONE);
         resetChromeAutoHideTimer();
     }
@@ -2527,8 +2627,9 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
             menuItemOpenFile.setEnabled(isExternalDocument);
         }
         if (btnSelectionCopy != null) {
-            btnSelectionCopy.setVisibility(externalVisibility);
-            btnSelectionCopy.setEnabled(isExternalDocument);
+            boolean canCopy = !previewMode;
+            btnSelectionCopy.setVisibility(canCopy ? View.VISIBLE : View.GONE);
+            btnSelectionCopy.setEnabled(canCopy);
         }
         if (menuItemShare != null) {
             boolean hasShareableSource = resolvedDoc != null
@@ -2540,7 +2641,7 @@ public class MedvixPdfActivity extends AppCompatActivity implements ViewerIntera
     }
 
     private void copyActiveSelectionToClipboard() {
-        if (!isExternalDocument) return;
+        if (previewMode) return;
         TextSelectionResult sel = this.activeSelectionResult;
         if (sel == null || TextUtils.isEmpty(sel.selectedText)) return;
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -2815,6 +2916,11 @@ private void triggerNativePrint() {
     }
 
     private void closeCurrentDocumentResources() {
+        if (activeOutlineTask != null) {
+            activeOutlineTask.cancel();
+            activeOutlineTask = null;
+        }
+        documentOutlineItems.clear();
         if (pdfPageAdapter != null) {
             pdfPageAdapter.shutdown();
             pdfRecyclerView.setAdapter(null);

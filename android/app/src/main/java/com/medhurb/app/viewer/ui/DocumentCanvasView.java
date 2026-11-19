@@ -1335,6 +1335,10 @@ public class DocumentCanvasView extends View {
             }
         }
 
+        if (draggingHandleMode != HANDLE_NONE && getParent() != null) {
+            getParent().requestDisallowInterceptTouchEvent(true);
+        }
+
         // 3. Multi-touch pinch zoom + single-finger pan/fling/tap/long-press
         boolean scaleHandled = scaleDetector.onTouchEvent(event);
         boolean gestureHandled = gestureDetector.onTouchEvent(event);
@@ -1686,13 +1690,22 @@ public class DocumentCanvasView extends View {
 
         @Override
         public void onLongPress(@NonNull MotionEvent e) {
-            if (interactionMode != InteractionMode.READ) return;
+            if (interactionMode != InteractionMode.READ || previewLocked) return;
             if (pdfEngine == null || !pdfEngine.supportsNativeSelection()) return;
+
+            ViewParent parent = getParent();
+            if (parent != null) {
+                parent.requestDisallowInterceptTouchEvent(true);
+            }
 
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
             PointF tapPt = screenToUnrotatedPdfPoint(e.getX(), e.getY());
-            selectionAnchorPdfPt = new PointF(Math.max(0f, tapPt.x - 14f), tapPt.y);
-            selectionFocusPdfPt = new PointF(Math.min(rawLogicalWidth, tapPt.x + 14f), tapPt.y);
+            selectionAnchorPdfPt = new PointF(
+                    Math.max(0f, tapPt.x - 18f),
+                    Math.max(0f, tapPt.y - 6f));
+            selectionFocusPdfPt = new PointF(
+                    Math.min(rawLogicalWidth, tapPt.x + 18f),
+                    Math.min(rawLogicalHeight, tapPt.y + 6f));
             runAsyncTextSelection(selectionAnchorPdfPt, selectionFocusPdfPt, true);
         }
 

@@ -35,13 +35,20 @@ import com.medhurb.app.viewer.render.BitmapMemoryPool.RenderKind;
 import com.medhurb.app.viewer.storage.MedvixStorageResolver;
 import com.medhurb.app.viewer.storage.MedvixStorageResolver.ResolvedDocument;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -50,6 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.Inflater;
 
 /**
  * PdfDocumentEngine
@@ -384,6 +392,38 @@ public final class PdfDocumentEngine implements AutoCloseable {
         void onLinksError(int pageIndex, @NonNull Throwable error);
     }
 
+    public static final class OutlineItem {
+        @NonNull public final String title;
+        public final int pageIndex;
+        public final int level;
+        @NonNull public final List<OutlineItem> children;
+
+        public OutlineItem(@NonNull String title,
+                           int pageIndex,
+                           int level,
+                           @NonNull List<OutlineItem> children) {
+            this.title = title;
+            this.pageIndex = Math.max(0, pageIndex);
+            this.level = Math.max(0, level);
+            this.children = Collections.unmodifiableList(new ArrayList<>(children));
+        }
+    }
+
+    public interface OutlineCallback {
+        void onOutlineLoaded(@NonNull List<OutlineItem> items);
+        void onOutlineError(@NonNull Throwable error);
+    }
+
+    private static final class PdfTextRun {
+        @NonNull final String text;
+        @NonNull final RectF boundsPt;
+
+        PdfTextRun(@NonNull String text, @NonNull RectF boundsPt) {
+            this.text = text;
+            this.boundsPt = boundsPt;
+        }
+    }
+
     // ── Instance State ───────────────────────────────────────────────────────
 
     @NonNull private final ResolvedDocument resolvedDoc;
@@ -401,6 +441,8 @@ public final class PdfDocumentEngine implements AutoCloseable {
     // Fair lock guarantees interactive viewport renders aren't starved by background search
     private final ReentrantLock renderLock = new ReentrantLock(true);
     private final PageMetrics[] metricsCache;
+    private final Map<Integer, List<PdfTextRun>> pageTextRunsCache =
+            Collections.synchronizedMap(new HashMap<>());
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private final ExecutorService interactiveExecutor;
@@ -536,11 +578,11 @@ public final class PdfDocumentEngine implements AutoCloseable {
     }
 
     public boolean supportsTextAndSearch() {
-        return isUpgradedPdfApiSupported() || (compatDelegate != null && resolvedDoc.hasBackingFile());
+        return !closed.get();
     }
 
     public boolean supportsNativeSelection() {
-        return isUpgradedPdfApiSupported();
+        return !closed.get();
     }
 
     public boolean supportsDocumentWrite() {
@@ -1013,16 +1055,21 @@ public final class PdfDocumentEngine implements AutoCloseable {
                                                    @Nullable Pattern filterPattern) throws IOException {
         ensureOpen();
         if (isUpgradedPdfApiSupported()) {
-            return searchSinglePageUpgraded(pageIndex, query, filterPattern);
+            List<SearchMatch> upgraded = searchSinglePageUpgraded(pageIndex, query, filterPattern);
+            if (!upgraded.isEmpty()) {
+                return upgraded;
+            }
         }
         if (compatDelegate != null && resolvedDoc.hasBackingFile()) {
             File file = resolvedDoc.getBackingFile();
             if (file != null) {
                 List<TextSpan> spans = compatDelegate.extractTextSpans(file, pageIndex);
-                return matchAgainstTextSpans(pageIndex, spans, filterPattern);
+                if (!spans.isEmpty()) {
+                    return matchAgainstTextSpans(pageIndex, spans, filterPattern);
+                }
             }
         }
-        return Collections.emptyList();
+        return searchSinglePageStreamFallback(pageIndex, filterPattern);
     }
 
     @RequiresApi(api = 35)
@@ -1039,11 +1086,12 @@ public final class PdfDocumentEngine implements AutoCloseable {
                     return Collections.emptyList();
                 }
 
-                String pageText = joinPageText(page.getTextContents());
+                // Join without extra separator so indices align 1:1 with PageMatchBounds.getTextStartIndex()
+                String pageText = joinPageTextRaw(page.getTextContents());
                 List<SearchMatch> filtered = new ArrayList<>(rawMatches.size());
 
                 for (PageMatchBounds m : rawMatches) {
-                    if (m == null) continue;
+                    if (m == null || m.getBounds() == null || m.getBounds().isEmpty()) continue;
                     int startIdx = m.getTextStartIndex();
                     String snippet = extractSnippet(pageText, startIdx, query.length());
 
@@ -1080,6 +1128,31 @@ public final class PdfDocumentEngine implements AutoCloseable {
     }
 
     @NonNull
+    private List<SearchMatch> searchSinglePageStreamFallback(int pageIndex,
+                                                             @Nullable Pattern filterPattern) throws IOException {
+        if (filterPattern == null) return Collections.emptyList();
+        List<PdfTextRun> runs = getOrExtractPageTextRuns(pageIndex);
+        if (runs.isEmpty()) return Collections.emptyList();
+
+        List<SearchMatch> matches = new ArrayList<>();
+        for (int i = 0; i < runs.size(); i++) {
+            PdfTextRun run = runs.get(i);
+            Matcher matcher = filterPattern.matcher(run.text);
+            while (matcher.find()) {
+                String snippet = buildRunContextSnippet(runs, i);
+                matches.add(new SearchMatch(
+                        pageIndex,
+                        matches.size(),
+                        matcher.start(),
+                        snippet,
+                        Collections.singletonList(new RectF(run.boundsPt))
+                ));
+            }
+        }
+        return matches;
+    }
+
+    @NonNull
     private static List<SearchMatch> matchAgainstTextSpans(int pageIndex,
                                                            @NonNull List<TextSpan> spans,
                                                            @Nullable Pattern pattern) {
@@ -1101,17 +1174,22 @@ public final class PdfDocumentEngine implements AutoCloseable {
         return results;
     }
 
-    /**
-     * Native text selection between two PDF page point coordinates (API 35+).
+  /**
+- Native text selection between two PDF page point coordinates across all Android versions.
      */
     @Nullable
     public TextSelectionResult selectTextAtPoints(int pageIndex,
                                                     @NonNull Point startPt,
                                                     @NonNull Point stopPt) throws IOException {
-        if (!isUpgradedPdfApiSupported()) return null;
         ensureOpen();
         validatePageIndex(pageIndex, true);
-        return selectTextUpgraded(pageIndex, startPt, stopPt);
+        if (isUpgradedPdfApiSupported()) {
+            TextSelectionResult upgraded = selectTextUpgraded(pageIndex, startPt, stopPt);
+            if (upgraded != null) {
+                return upgraded;
+            }
+        }
+        return selectTextStreamFallback(pageIndex, startPt, stopPt);
     }
 
     @RequiresApi(api = 35)
@@ -1140,6 +1218,14 @@ public final class PdfDocumentEngine implements AutoCloseable {
                         }
                     }
                 }
+                if (allBounds.isEmpty() && selection.getBounds() != null) {
+                    for (PageMatchBounds mb : selection.getBounds()) {
+                        if (mb != null && mb.getBounds() != null) {
+                            allBounds.addAll(mb.getBounds());
+                        }
+                    }
+                }
+                if (allBounds.isEmpty()) return null;
 
                 int startIdx = selection.getStart() != null ? selection.getStart().getIndex() : -1;
                 int stopIdx = selection.getStop() != null ? selection.getStop().getIndex() : -1;
@@ -1148,6 +1234,40 @@ public final class PdfDocumentEngine implements AutoCloseable {
         } finally {
             renderLock.unlock();
         }
+    }
+
+    @Nullable
+    private TextSelectionResult selectTextStreamFallback(int pageIndex,
+                                                         @NonNull Point startPt,
+                                                         @NonNull Point stopPt) throws IOException {
+        List<PdfTextRun> runs = getOrExtractPageTextRuns(pageIndex);
+        if (runs.isEmpty()) return null;
+
+        float minX = Math.min(startPt.x, stopPt.x) - 6f;
+        float maxX = Math.max(startPt.x, stopPt.x) + 6f;
+        float minY = Math.min(startPt.y, stopPt.y) - 6f;
+        float maxY = Math.max(startPt.y, stopPt.y) + 6f;
+        RectF queryRect = new RectF(minX, minY, maxX, maxY);
+
+        List<RectF> selectedBounds = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        int firstIdx = -1;
+        int lastIdx = -1;
+
+        for (int i = 0; i < runs.size(); i++) {
+            PdfTextRun run = runs.get(i);
+            if (RectF.intersects(run.boundsPt, queryRect)) {
+                if (firstIdx < 0) firstIdx = i;
+                lastIdx = i;
+                if (sb.length() > 0) sb.append(' ');
+                sb.append(run.text);
+                selectedBounds.add(new RectF(run.boundsPt));
+            }
+        }
+
+        String text = sb.toString().trim();
+        if (text.isEmpty() || selectedBounds.isEmpty()) return null;
+        return new TextSelectionResult(pageIndex, text, firstIdx, lastIdx, selectedBounds);
     }
 
     /**
@@ -1435,6 +1555,536 @@ public final class PdfDocumentEngine implements AutoCloseable {
             sb.append(c.getText());
         }
         return sb.toString();
+    }
+
+    @RequiresApi(api = 35)
+    @NonNull
+    private static String joinPageTextRaw(@Nullable List<PdfPageTextContent> contents) {
+        if (contents == null || contents.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (PdfPageTextContent c : contents) {
+            if (c != null && !TextUtils.isEmpty(c.getText())) {
+                sb.append(c.getText());
+            }
+        }
+        return sb.toString();
+    }
+
+    // ── Book Outline (/Outlines) & Content-Stream Extraction ─────────────────
+
+    @NonNull
+    public TaskHandle extractOutlineAsync(@NonNull OutlineCallback callback) {
+        TaskHandle handle = new TaskHandle();
+        Future<?> future = backgroundExecutor.submit(() -> {
+            if (handle.isCancelled() || closed.get()) return;
+            try {
+                List<OutlineItem> items = parsePdfOutlineTree();
+                if (items.isEmpty()) {
+                    items = extractFallbackTocFromFrontPages();
+                }
+                final List<OutlineItem> finalItems = items;
+                if (!handle.isCancelled() && !closed.get()) {
+                    mainHandler.post(() -> callback.onOutlineLoaded(finalItems));
+                }
+            } catch (Throwable t) {
+                if (!handle.isCancelled() && !closed.get()) {
+                    mainHandler.post(() -> callback.onOutlineError(t));
+                }
+            }
+        });
+        handle.attachFuture(future);
+        return handle;
+    }
+
+    @NonNull
+    private List<OutlineItem> parsePdfOutlineTree() {
+        List<OutlineItem> roots = new ArrayList<>();
+        if (closed.get()) return roots;
+
+        try {
+            byte[] pdfBytes = readAllBytesFromPfd();
+            if (pdfBytes.length == 0) return roots;
+
+            String raw = new String(pdfBytes, StandardCharsets.ISO_8859_1);
+            Map<Integer, String> objects = indexIndirectObjects(raw);
+            if (objects.isEmpty()) return roots;
+
+            List<Integer> orderedPageObjNums = resolveOrderedPageObjectNumbers(objects);
+            Map<Integer, Integer> objNumToPageIndex = new HashMap<>();
+            for (int i = 0; i < orderedPageObjNums.size(); i++) {
+                objNumToPageIndex.put(orderedPageObjNums.get(i), i);
+            }
+
+            int rootObj = findRootCatalogObjNum(raw, objects);
+            String rootDict = objects.get(rootObj);
+            if (rootDict == null) return roots;
+
+            Integer outlinesObj = extractIndirectRef(rootDict, "/Outlines");
+            if (outlinesObj == null) return roots;
+
+            String outlinesDict = objects.get(outlinesObj);
+            if (outlinesDict == null) return roots;
+
+            Map<String, Integer> namedDests = buildNamedDestinationMap(rootDict, objects, objNumToPageIndex);
+
+            Integer firstItemObj = extractIndirectRef(outlinesDict, "/First");
+            if (firstItemObj != null) {
+                walkOutlineSiblings(firstItemObj, 0, objects, objNumToPageIndex, namedDests, roots, 0);
+            }
+        } catch (Throwable ignored) {
+        }
+        return roots;
+    }
+
+    private void walkOutlineSiblings(int currentObjNum,
+                                     int level,
+                                     @NonNull Map<Integer, String> objects,
+                                     @NonNull Map<Integer, Integer> objNumToPageIndex,
+                                     @NonNull Map<String, Integer> namedDests,
+                                     @NonNull List<OutlineItem> outList,
+                                     int safetyDepth) {
+        if (safetyDepth > 1200) return;
+        Integer cursor = currentObjNum;
+        int guard = 0;
+
+        while (cursor != null && guard++ < 800) {
+            String dict = objects.get(cursor);
+            if (dict == null) break;
+
+            String title = extractPdfStringValue(dict, "/Title");
+            int targetPage = resolveOutlineDestinationPage(dict, objects, objNumToPageIndex, namedDests);
+
+            List<OutlineItem> children = new ArrayList<>();
+            Integer firstChild = extractIndirectRef(dict, "/First");
+            if (firstChild != null && level < 5) {
+                walkOutlineSiblings(firstChild, level + 1, objects, objNumToPageIndex,
+                        namedDests, children, safetyDepth + 1);
+            }
+
+            if (!title.isEmpty()) {
+                outList.add(new OutlineItem(title, targetPage, level, children));
+            }
+
+            cursor = extractIndirectRef(dict, "/Next");
+        }
+    }
+
+    private int resolveOutlineDestinationPage(@NonNull String itemDict,
+                                              @NonNull Map<Integer, String> objects,
+                                              @NonNull Map<Integer, Integer> objNumToPageIndex,
+                                              @NonNull Map<String, Integer> namedDests) {
+        int page = resolveDestEntry(itemDict, objects, objNumToPageIndex, namedDests);
+        if (page >= 0) return page;
+
+        Integer actionRef = extractIndirectRef(itemDict, "/A");
+        String actionDict = (actionRef != null) ? objects.get(actionRef) : itemDict;
+        if (actionDict != null) {
+            int actionPage = resolveDestEntry(actionDict, objects, objNumToPageIndex, namedDests);
+            if (actionPage >= 0) return actionPage;
+        }
+        return 0;
+    }
+
+    private int resolveDestEntry(@NonNull String dict,
+                                 @NonNull Map<Integer, String> objects,
+                                 @NonNull Map<Integer, Integer> objNumToPageIndex,
+                                 @NonNull Map<String, Integer> namedDests) {
+        Matcher arrayRef = Pattern.compile("/(?:Dest|D)\\s*\\[\\s*(\\d+)\\s+\\d+\\s+R").matcher(dict);
+        if (arrayRef.find()) {
+            int pageObj = Integer.parseInt(arrayRef.group(1));
+            Integer idx = objNumToPageIndex.get(pageObj);
+            if (idx != null) return idx;
+        }
+        Matcher named = Pattern.compile("/(?:Dest|D)\\s*(?:\\(([^)]+)\\)|/([^\\s/\\[\\]<>()]+))").matcher(dict);
+        if (named.find()) {
+            String key = named.group(1) != null ? named.group(1) : named.group(2);
+            Integer idx = namedDests.get(key);
+            if (idx != null) return idx;
+        }
+        Integer indirectDest = extractIndirectRef(dict, "/Dest");
+        if (indirectDest != null && objects.containsKey(indirectDest)) {
+            String target = objects.get(indirectDest);
+            Matcher m = Pattern.compile("\\[\\s*(\\d+)\\s+\\d+\\s+R").matcher(target);
+            if (m.find()) {
+                Integer idx = objNumToPageIndex.get(Integer.parseInt(m.group(1)));
+                if (idx != null) return idx;
+            }
+        }
+        return -1;
+    }
+
+    @NonNull
+    private List<OutlineItem> extractFallbackTocFromFrontPages() {
+        List<OutlineItem> fallback = new ArrayList<>();
+        int scanLimit = Math.min(totalPageCount, 8);
+        Pattern tocLinePattern = Pattern.compile("^(.{4,72}?)[.\\s·•_]{2,}(\\d{1,4})$");
+
+        try {
+            for (int p = 0; p < scanLimit; p++) {
+                List<PdfTextRun> runs = getOrExtractPageTextRuns(p);
+                for (PdfTextRun run : runs) {
+                    Matcher m = tocLinePattern.matcher(run.text.trim());
+                    if (m.matches()) {
+                        String topic = m.group(1).trim();
+                        int docPageNum = Integer.parseInt(m.group(2));
+                        if (docPageNum >= 1 && docPageNum <= totalPageCount) {
+                            fallback.add(new OutlineItem(topic, docPageNum - 1, 0, Collections.emptyList()));
+                        }
+                    }
+                }
+                if (fallback.size() >= 6) break;
+            }
+        } catch (Throwable ignored) {
+        }
+        return fallback;
+    }
+
+    @NonNull
+    private List<PdfTextRun> getOrExtractPageTextRuns(int pageIndex) throws IOException {
+        List<PdfTextRun> cached = pageTextRunsCache.get(pageIndex);
+        if (cached != null) return cached;
+
+        List<PdfTextRun> extracted = new ArrayList<>();
+        PageMetrics metrics = getPageMetrics(pageIndex);
+        float pageH = metrics.rawHeightPt;
+
+        byte[] pdfBytes = readAllBytesFromPfd();
+        if (pdfBytes.length > 0) {
+            String raw = new String(pdfBytes, StandardCharsets.ISO_8859_1);
+            Map<Integer, String> objects = indexIndirectObjects(raw);
+            List<Integer> pageObjs = resolveOrderedPageObjectNumbers(objects);
+
+            if (pageIndex >= 0 && pageIndex < pageObjs.size()) {
+                String pageDict = objects.get(pageObjs.get(pageIndex));
+                if (pageDict != null) {
+                    String contentStream = extractDecodedPageContentStream(pageDict, objects);
+                    parseContentStreamTextRuns(contentStream, pageH, extracted);
+                }
+            }
+        }
+
+        pageTextRunsCache.put(pageIndex, extracted);
+        return extracted;
+    }
+
+    @NonNull
+    private static String buildRunContextSnippet(@NonNull List<PdfTextRun> runs, int centerIdx) {
+        int start = Math.max(0, centerIdx - 3);
+        int end = Math.min(runs.size() - 1, centerIdx + 3);
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i <= end; i++) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(runs.get(i).text);
+        }
+        return sb.toString();
+    }
+
+    private static void parseContentStreamTextRuns(@NonNull String stream,
+                                                   float pageHeightPt,
+                                                   @NonNull List<PdfTextRun> outRuns) {
+        if (stream.isEmpty()) return;
+        float curX = 36f;
+        float curY = pageHeightPt - 50f;
+        float fontSize = 11f;
+
+        Matcher tmMatcher = Pattern.compile(
+                "([+-]?\\d*\\.?\\d+)\\s+([+-]?\\d*\\.?\\d+)\\s+([+-]?\\d*\\.?\\d+)\\s+([+-]?\\d*\\.?\\d+)\\s+([+-]?\\d*\\.?\\d+)\\s+([+-]?\\d*\\.?\\d+)\\s+Tm")
+                .matcher(stream);
+        Matcher tdMatcher = Pattern.compile("([+-]?\\d*\\.?\\d+)\\s+([+-]?\\d*\\.?\\d+)\\s+T[dD]").matcher(stream);
+        Matcher tfMatcher = Pattern.compile("/\\S+\\s+(\\d*\\.?\\d+)\\s+Tf").matcher(stream);
+        Matcher textOpMatcher = Pattern.compile("\\(([^()\\\\]*(?:\\\\.[^()\\\\]*)*)\\)\\s*Tj|\\[(.*?)\\]\\s*TJ", Pattern.DOTALL)
+                .matcher(stream);
+
+        int pos = 0;
+        while (pos < stream.length()) {
+            int nextText = textOpMatcher.find(pos) ? textOpMatcher.start() : Integer.MAX_VALUE;
+            if (nextText == Integer.MAX_VALUE) break;
+
+            if (tmMatcher.find(pos) && tmMatcher.start() < nextText) {
+                fontSize = Math.max(6f, Math.abs(Float.parseFloat(tmMatcher.group(4))));
+                curX = Float.parseFloat(tmMatcher.group(5));
+                curY = Float.parseFloat(tmMatcher.group(6));
+            }
+            if (tdMatcher.find(pos) && tdMatcher.start() < nextText) {
+                curX += Float.parseFloat(tdMatcher.group(1));
+                curY += Float.parseFloat(tdMatcher.group(2));
+            }
+            if (tfMatcher.find(pos) && tfMatcher.start() < nextText) {
+                fontSize = Math.max(6f, Float.parseFloat(tfMatcher.group(1)));
+            }
+
+            StringBuilder runText = new StringBuilder();
+            if (textOpMatcher.group(1) != null) {
+                runText.append(unescapePdfLiteral(textOpMatcher.group(1)));
+            } else if (textOpMatcher.group(2) != null) {
+                Matcher inner = Pattern.compile("\\(([^()\\\\]*(?:\\\\.[^()\\\\]*)*)\\)").matcher(textOpMatcher.group(2));
+                while (inner.find()) {
+                    runText.append(unescapePdfLiteral(inner.group(1)));
+                }
+            }
+
+            String cleaned = runText.toString().trim();
+            if (!cleaned.isEmpty()) {
+                String[] words = cleaned.split("\\s+");
+                float cursorX = curX;
+                float topAndroidY = Math.max(0f, pageHeightPt - curY - fontSize * 0.85f);
+                float bottomAndroidY = Math.min(pageHeightPt, topAndroidY + fontSize * 1.2f);
+                float charWidth = fontSize * 0.52f;
+
+                for (String w : words) {
+                    if (w.isEmpty()) continue;
+                    float wWidth = Math.max(8f, w.length() * charWidth);
+                    outRuns.add(new PdfTextRun(
+                            w,
+                            new RectF(cursorX, topAndroidY, cursorX + wWidth, bottomAndroidY)
+                    ));
+                    cursorX += wWidth + charWidth;
+                }
+                curX = cursorX;
+            }
+            pos = textOpMatcher.end();
+        }
+    }
+
+    @NonNull
+    private byte[] readAllBytesFromPfd() throws IOException {
+        renderLock.lock();
+        try {
+            if (closed.get()) return new byte[0];
+            FileChannel channel = new FileInputStream(pfd.getFileDescriptor()).getChannel();
+            long size = channel.size();
+            if (size <= 0 || size > 64L * 1024L * 1024L) return new byte[0];
+            ByteBuffer buffer = ByteBuffer.allocate((int) size);
+            long pos = 0;
+            while (buffer.hasRemaining()) {
+                int read = channel.read(buffer, pos);
+                if (read <= 0) break;
+                pos += read;
+            }
+            return buffer.array();
+        } finally {
+            renderLock.unlock();
+        }
+    }
+
+    @NonNull
+    private static Map<Integer, String> indexIndirectObjects(@NonNull String rawPdf) {
+        Map<Integer, String> map = new HashMap<>();
+        Matcher m = Pattern.compile("(\\d+)\\s+\\d+\\s+obj\\b(.*?)endobj", Pattern.DOTALL).matcher(rawPdf);
+        while (m.find()) {
+            map.put(Integer.parseInt(m.group(1)), m.group(2));
+        }
+        return map;
+    }
+
+    private static int findRootCatalogObjNum(@NonNull String rawPdf, @NonNull Map<Integer, String> objects) {
+        Matcher trailer = Pattern.compile("/Root\\s+(\\d+)\\s+\\d+\\s+R").matcher(rawPdf);
+        if (trailer.find()) {
+            return Integer.parseInt(trailer.group(1));
+        }
+        for (Map.Entry<Integer, String> e : objects.entrySet()) {
+            if (e.getValue().contains("/Type") && e.getValue().contains("/Catalog")) {
+                return e.getKey();
+            }
+        }
+        return -1;
+    }
+
+    @NonNull
+    private static List<Integer> resolveOrderedPageObjectNumbers(@NonNull Map<Integer, String> objects) {
+        List<Integer> pages = new ArrayList<>();
+        int rootPagesObj = -1;
+        for (Map.Entry<Integer, String> e : objects.entrySet()) {
+            String v = e.getValue();
+            if (v.contains("/Type") && v.contains("/Pages") && !v.contains("/Parent")) {
+                rootPagesObj = e.getKey();
+                break;
+            }
+        }
+        if (rootPagesObj >= 0) {
+            collectPagesRecursive(rootPagesObj, objects, pages, 0);
+        }
+        return pages;
+    }
+
+    private static void collectPagesRecursive(int nodeObj,
+                                              @NonNull Map<Integer, String> objects,
+                                              @NonNull List<Integer> outPages,
+                                              int depth) {
+        if (depth > 40) return;
+        String dict = objects.get(nodeObj);
+        if (dict == null) return;
+
+        Matcher kids = Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL).matcher(dict);
+        if (kids.find()) {
+            Matcher ref = Pattern.compile("(\\d+)\\s+\\d+\\s+R").matcher(kids.group(1));
+            while (ref.find()) {
+                int childObj = Integer.parseInt(ref.group(1));
+                String childDict = objects.get(childObj);
+                if (childDict != null && childDict.contains("/Kids")) {
+                    collectPagesRecursive(childObj, objects, outPages, depth + 1);
+                } else {
+                    outPages.add(childObj);
+                }
+            }
+        } else if (dict.contains("/Page")) {
+            outPages.add(nodeObj);
+        }
+    }
+
+    @NonNull
+    private static Map<String, Integer> buildNamedDestinationMap(@NonNull String rootDict,
+                                                                 @NonNull Map<Integer, String> objects,
+                                                                 @NonNull Map<Integer, Integer> objNumToPageIndex) {
+        Map<String, Integer> map = new HashMap<>();
+        Integer namesObj = extractIndirectRef(rootDict, "/Names");
+        if (namesObj != null && objects.containsKey(namesObj)) {
+            String namesDict = objects.get(namesObj);
+            Integer destsTreeObj = extractIndirectRef(namesDict, "/Dests");
+            if (destsTreeObj != null) {
+                parseNameTreeNode(destsTreeObj, objects, objNumToPageIndex, map, 0);
+            }
+        }
+        return map;
+    }
+
+    private static void parseNameTreeNode(int nodeObj,
+                                          @NonNull Map<Integer, String> objects,
+                                          @NonNull Map<Integer, Integer> objNumToPageIndex,
+                                          @NonNull Map<String, Integer> outMap,
+                                          int depth) {
+        if (depth > 25) return;
+        String dict = objects.get(nodeObj);
+        if (dict == null) return;
+
+        Matcher kids = Pattern.compile("/Kids\\s*\\[(.*?)\\]", Pattern.DOTALL).matcher(dict);
+        if (kids.find()) {
+            Matcher ref = Pattern.compile("(\\d+)\\s+\\d+\\s+R").matcher(kids.group(1));
+            while (ref.find()) {
+                parseNameTreeNode(Integer.parseInt(ref.group(1)), objects, objNumToPageIndex, outMap, depth + 1);
+            }
+        }
+
+        Matcher names = Pattern.compile("/Names\\s*\\[(.*?)\\]\\s*(?=/|>>)", Pattern.DOTALL).matcher(dict);
+        if (names.find()) {
+            Matcher pair = Pattern.compile("\\(([^)]+)\\)\\s*(?:\\[\\s*(\\d+)\\s+\\d+\\s+R|(\\d+)\\s+\\d+\\s+R)")
+                    .matcher(names.group(1));
+            while (pair.find()) {
+                String name = pair.group(1);
+                int targetObj = Integer.parseInt(pair.group(2) != null ? pair.group(2) : pair.group(3));
+                Integer pageIdx = objNumToPageIndex.get(targetObj);
+                if (pageIdx == null && objects.containsKey(targetObj)) {
+                    Matcher m = Pattern.compile("\\[\\s*(\\d+)\\s+\\d+\\s+R").matcher(objects.get(targetObj));
+                    if (m.find()) {
+                        pageIdx = objNumToPageIndex.get(Integer.parseInt(m.group(1)));
+                    }
+                }
+                if (pageIdx != null) {
+                    outMap.put(name, pageIdx);
+                }
+            }
+        }
+    }
+
+    @Nullable
+    private static Integer extractIndirectRef(@NonNull String dict, @NonNull String key) {
+        Matcher m = Pattern.compile(Pattern.quote(key) + "\\s+(\\d+)\\s+\\d+\\s+R").matcher(dict);
+        return m.find() ? Integer.parseInt(m.group(1)) : null;
+    }
+
+    @NonNull
+    private static String extractPdfStringValue(@NonNull String dict, @NonNull String key) {
+        Matcher lit = Pattern.compile(Pattern.quote(key) + "\\s*\\(([^()\\\\]*(?:\\\\.[^()\\\\]*)*)\\)").matcher(dict);
+        if (lit.find()) {
+            return unescapePdfLiteral(lit.group(1)).trim();
+        }
+        Matcher hex = Pattern.compile(Pattern.quote(key) + "\\s*<([0-9A-Fa-f\\s]+)>").matcher(dict);
+        if (hex.find()) {
+            return decodePdfHexString(hex.group(1)).trim();
+        }
+        return "";
+    }
+
+    @NonNull
+    private static String unescapePdfLiteral(@NonNull String s) {
+        return s.replace("\\(", "(")
+                .replace("\\)", ")")
+                .replace("\\\\", "\\")
+                .replace("\\n", " ")
+                .replace("\\r", " ")
+                .replace("\\t", " ");
+    }
+
+    @NonNull
+    private static String decodePdfHexString(@NonNull String hexRaw) {
+        String clean = hexRaw.replaceAll("\\s+", "");
+        if (clean.length() < 2) return "";
+        byte[] bytes = new byte[clean.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+        }
+        if (bytes.length >= 2 && (bytes[0] & 0xFF) == 0xFE && (bytes[1] & 0xFF) == 0xFF) {
+            return new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16BE);
+        }
+        return new String(bytes, StandardCharsets.ISO_8859_1);
+    }
+
+    @NonNull
+    private static String extractDecodedPageContentStream(@NonNull String pageDict,
+                                                          @NonNull Map<Integer, String> objects) {
+        List<Integer> contentObjs = new ArrayList<>();
+        Matcher arr = Pattern.compile("/Contents\\s*\\[(.*?)\\]", Pattern.DOTALL).matcher(pageDict);
+        if (arr.find()) {
+            Matcher ref = Pattern.compile("(\\d+)\\s+\\d+\\s+R").matcher(arr.group(1));
+            while (ref.find()) contentObjs.add(Integer.parseInt(ref.group(1)));
+        } else {
+            Integer single = extractIndirectRef(pageDict, "/Contents");
+            if (single != null) contentObjs.add(single);
+        }
+
+        StringBuilder combined = new StringBuilder();
+        for (int objNum : contentObjs) {
+            String objBody = objects.get(objNum);
+            if (objBody == null) continue;
+            int streamStart = objBody.indexOf("stream");
+            int streamEnd = objBody.lastIndexOf("endstream");
+            if (streamStart < 0 || streamEnd <= streamStart) continue;
+
+            int dataOffset = streamStart + 6;
+            if (dataOffset < objBody.length() && objBody.charAt(dataOffset) == '\r') dataOffset++;
+            if (dataOffset < objBody.length() && objBody.charAt(dataOffset) == '\n') dataOffset++;
+
+            byte[] rawStream = objBody.substring(dataOffset, streamEnd).getBytes(StandardCharsets.ISO_8859_1);
+            if (objBody.contains("/FlateDecode")) {
+                byte[] inflated = inflateZlib(rawStream);
+                combined.append(new String(inflated, StandardCharsets.ISO_8859_1)).append('\n');
+            } else {
+                combined.append(new String(rawStream, StandardCharsets.ISO_8859_1)).append('\n');
+            }
+        }
+        return combined.toString();
+    }
+
+    @NonNull
+    private static byte[] inflateZlib(@NonNull byte[] compressed) {
+        Inflater inflater = new Inflater();
+        inflater.setInput(compressed);
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[4096];
+            while (!inflater.finished()) {
+                int count = inflater.inflate(buf);
+                if (count == 0) {
+                    if (inflater.needsInput() || inflater.needsDictionary()) break;
+                } else {
+                    out.write(buf, 0, count);
+                }
+            }
+            return out.toByteArray();
+        } catch (Throwable ignored) {
+            return compressed;
+        } finally {
+            inflater.end();
+        }
     }
 
     @NonNull
